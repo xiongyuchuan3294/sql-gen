@@ -1,0 +1,10 @@
+type: "data_clean"
+description: "Clean/Filter data using Insert Overwrite"
+params:
+  table_name: "example_table"
+  partition: "dt='2024-01-01'"
+  filter_condition: "user_id IS NOT NULL AND status != 'deleted'"
+  columns:  # Optional: schema columns if known, otherwise *
+    - "id"
+    - "name"
+    - "status"

@@ -1,0 +1,6 @@
+type: "drop_partition"
+description: "Drop a specific partition"
+params:
+  table_name: "example_table"
+  partition: "ds='2016-08-08'"
+  if_exists: true

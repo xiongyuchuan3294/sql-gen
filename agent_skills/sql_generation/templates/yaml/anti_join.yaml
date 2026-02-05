@@ -1,0 +1,10 @@
+type: "anti_join"
+description: "Find records in source but missing in target"
+params:
+  source_table: "table_a"
+  target_table: "table_b"
+  source_partition: "ds='2025-01-01'"
+  target_partition: "ds='2025-01-01'"
+  join_keys:
+    - "cust_id"
+    - "trans_id"

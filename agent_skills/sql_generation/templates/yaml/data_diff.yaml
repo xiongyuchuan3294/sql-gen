@@ -1,0 +1,13 @@
+type: "data_diff"
+description: "Compare two tables/partitions for differences"
+params:
+  source_table: "my_table"
+  target_table: "your_table"
+  source_partition: "ds='2024-04-30'"
+  target_partition: "ds='2024-04-30'"
+  join_keys:
+    - "cust_id"
+    - "account_no"
+  compare_columns:
+    - "name"
+    - "class"

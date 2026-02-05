@@ -1,0 +1,5 @@
+type: "data_num"
+description: "Count total rows in a partition"
+params:
+  table_name: "example_table"
+  partition: "dt='2024-01-01'"

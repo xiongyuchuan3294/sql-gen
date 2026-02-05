@@ -1,0 +1,78 @@
+{
+  "code": "0",
+  "msg": "请求成功",
+  "bizSeqNo": "TOOLBACK-e292a4a4-20b1-4b59-8468-4d3299653dc0-692",
+  "result": {
+    "sourceTableList": [
+      {
+        "tableName": "imd_amlai_ads_safe.machine_learn_model",
+        "partitionList": [],
+        "partitionInfo": {},
+        "viewSet": [],
+        "pathList": [
+          [
+            [
+              "imd_amlai_ads_safe.rrs_aml_ai_f_model_result",
+              "rrs_aml_ml_bdp_wtss:B_COMMUNITY_MODEL_RESULT"
+            ],
+            [
+              "imd_amlai_ads_safe.machine_learn_model",
+              null
+            ]
+          ]
+        ],
+        "isExclude": false,
+        "exclude": false
+      },
+      {
+        "tableName": "imd_amlai_ads_safe.rrs_aml_ads_community_final_output",
+        "partitionList": [
+          "${run_date_std}"
+        ],
+        "partitionInfo": {
+          "ds = ": [
+            "${run_date_std}"
+          ]
+        },
+        "viewSet": [],
+        "pathList": [
+          [
+            [
+              "imd_amlai_ads_safe.rrs_aml_ai_f_model_result",
+              "rrs_aml_ml_bdp_wtss:B_COMMUNITY_MODEL_RESULT"
+            ],
+            [
+              "imd_amlai_ads_safe.rrs_aml_ads_community_final_output",
+              null
+            ]
+          ]
+        ],
+        "isExclude": false,
+        "exclude": false
+      }
+    ],
+    "openNodeList": [
+      {
+        "wtssProjectName": "rrs_aml_ml_bdp_wtss",
+        "wtssJobName": "B_COMMUNITY_MODEL_RESULT",
+        "openNode": "rrs_aml_ml_bdp_wtss:B_COMMUNITY_MODEL_RESULT",
+        "jobPath": "/G_NETWORK_MODEL_/",
+        "isDqcNode": false,
+        "isExclude": false,
+        "processTable": [
+          "imd_amlai_ads_safe.rrs_aml_ai_f_model_result"
+        ],
+        "dqcNode": false,
+        "exclude": false
+      }
+    ],
+    "tableName": "imd_amlai_ads_safe.rrs_aml_ai_f_model_result",
+    "wtssInfo": {
+      "wtssProjectName": "rrs_aml_ml_bdp_wtss",
+      "wtssJobName": "G_NETWORK_MODEL_",
+      "rootJobPath": "/G_NETWORK_MODEL_/",
+      "realProject": "rrs_aml_ml_bdp_wtss",
+      "realFlow": "G_NETWORK_MODEL_"
+    }
+  }
+}

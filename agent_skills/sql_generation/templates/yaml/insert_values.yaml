@@ -1,0 +1,8 @@
+type: "insert_values"
+description: "Insert specific values into a table (Mock Data)"
+params:
+  table_name: "example_table"
+  partition: "ds='2025-01-01'"
+  data_rows:
+    - ["'val1'", "10"]
+    - ["'val2'", "20"]

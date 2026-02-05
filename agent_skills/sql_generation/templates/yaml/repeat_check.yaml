@@ -1,0 +1,8 @@
+type: "repeat_check"
+description: "Check for duplicate keys"
+params:
+  table_name: "example_table"
+  partition: "dt='2024-01-01'"
+  group_by_columns:
+    - "user_id"
+  having_threshold: 1

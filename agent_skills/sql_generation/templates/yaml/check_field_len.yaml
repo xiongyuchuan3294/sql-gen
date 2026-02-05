@@ -1,0 +1,7 @@
+type: "check_field_len"
+description: "Find longest values in a column"
+params:
+  table_name: "ads_aml_prod_eval_lg_case_df"
+  partition: "ds='2024-09-30' and dt='q3'"
+  column: "txn_amt"
+  limit: 5

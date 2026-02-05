@@ -1,0 +1,210 @@
+{
+  "metadata": {
+    "converted_at": "2026-01-09T14:34:29.849309",
+    "source_file": "table_relation.txt",
+    "node_count": 10,
+    "tables_found": 45
+  },
+  "nodes": [
+    {
+      "name": "B_NETWORK_BAD_CUST",
+      "dependencies": [
+        {
+          "table": "imd_aml_safe.rrs_aml_black_list_hit_all_dim",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_aml_safe.rrs_aml_case_report_final_info",
+          "partition": "date_add('${run_date_std}', -1)"
+        },
+        {
+          "table": "imd_aml_safe.rrs_aml_wash_webank_staff_info_fact",
+          "partition": "${run_date_std}"
+        }
+      ],
+      "result_table": "imd_amlai_ads_safe.rrs_aml_ads_network_bad_cust"
+    },
+    {
+      "name": "B_NETWORK_NO_FINANCE_AMT",
+      "dependencies": [
+        {
+          "table": "imd_aml_safe.rrs_aml_dw_ind_trans_di",
+          "partition": "date_sub('${run_date_std}', 31)"
+        },
+        {
+          "table": "imd_aml_safe.rrs_aml_wash_webank_staff_info_fact",
+          "partition": "${run_date_std}"
+        }
+      ],
+      "result_table": "imd_amlai_ads_safe.rrs_aml_ads_network_no_finance_amt"
+    },
+    {
+      "name": "B_NETWORK_IP_INTER",
+      "dependencies": [
+        {
+          "table": "imd_aml_safe.rrs_active_hj_t_active_user_log_ip_reflect",
+          "partition": "date_sub('${run_date_std}', 31)"
+        },
+        {
+          "table": "imd_aml_safe.rrs_aml_wash_webank_staff_info_fact",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_bad_cust",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_no_finance_amt",
+          "partition": "${run_date_std}"
+        }
+      ],
+      "result_table": "imd_amlai_ads_safe.rrs_aml_ads_network_ip_inter_bad"
+    },
+    {
+      "name": "B_NETWORK_DEV_INTER",
+      "dependencies": [
+        {
+          "table": "imd_aml_safe.rrs_active_hj_t_active_user_log_ip_reflect",
+          "partition": "date_sub('${run_date_std}', 31)"
+        },
+        {
+          "table": "imd_aml_safe.rrs_aml_wash_webank_staff_info_fact",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_bad_cust",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_no_finance_amt",
+          "partition": "${run_date_std}"
+        }
+      ],
+      "result_table": "imd_amlai_ads_safe.rrs_aml_ads_network_dev_inter_bad"
+    },
+    {
+      "name": "B_NETWORK_MAC_INTER",
+      "dependencies": [
+        {
+          "table": "imd_aml_safe.rrs_aml_dw_ind_trans_di",
+          "partition": "date_sub('${run_date_std}', 31)"
+        },
+        {
+          "table": "imd_aml_safe.rrs_aml_wash_webank_staff_info_fact",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_bad_cust",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_no_finance_amt",
+          "partition": "${run_date_std}"
+        }
+      ],
+      "result_table": "imd_amlai_ads_safe.rrs_aml_ads_network_mac_inter_bad"
+    },
+    {
+      "name": "B_NETWORK_TRANS_INTER",
+      "dependencies": [
+        {
+          "table": "imd_aml_safe.rrs_aml_dw_ind_trans_di",
+          "partition": "date_sub('${run_date_std}', 31)"
+        },
+        {
+          "table": "imd_aml_safe.rrs_aml_wash_webank_staff_info_fact",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_bad_cust",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_no_finance_amt",
+          "partition": "${run_date_std}"
+        }
+      ],
+      "result_table": "imd_amlai_ads_safe.rrs_aml_ads_network_trans_inter_bad"
+    },
+    {
+      "name": "B_NETWORK_TRANS_DIRECT",
+      "dependencies": [
+        {
+          "table": "imd_aml_safe.rrs_aml_dw_ind_trans_di",
+          "partition": "date_sub('${run_date_std}', 31)"
+        },
+        {
+          "table": "imd_aml_safe.rrs_aml_wash_webank_staff_info_fact",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_bad_cust",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_no_finance_amt",
+          "partition": "${run_date_std}"
+        }
+      ],
+      "result_table": "imd_amlai_ads_safe.rrs_aml_ads_network_trans_direct_bad"
+    },
+    {
+      "name": "B_NETWORK_ADR_INTER",
+      "dependencies": [
+        {
+          "table": "imd_aml_dm_safe.dwd_aml_icust_info_df",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_aml_safe.rrs_aml_wash_webank_staff_info_fact",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_bad_cust",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_no_finance_amt",
+          "partition": "${run_date_std}"
+        }
+      ],
+      "result_table": "imd_amlai_ads_safe.rrs_aml_ads_network_adr_inter_bad"
+    },
+    {
+      "name": "B_NETWORK_PHONE_INTER",
+      "dependencies": [
+        {
+          "table": "imd_aml_dm_safe.dwd_aml_icust_info_df",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_aml_safe.rrs_aml_wash_webank_staff_info_fact",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_bad_cust",
+          "partition": "${run_date_std}"
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_network_no_finance_amt",
+          "partition": "${run_date_std}"
+        }
+      ],
+      "result_table": "imd_amlai_ads_safe.rrs_aml_ads_network_phone_inter_bad"
+    },
+    {
+      "name": "B_COMMUNITY_MODEL_RESULT",
+      "dependencies": [
+        {
+          "table": "imd_amlai_ads_safe.machine_learn_model",
+          "partition": ""
+        },
+        {
+          "table": "imd_amlai_ads_safe.rrs_aml_ads_community_final_output",
+          "partition": "${run_date_std}"
+        }
+      ],
+      "result_table": "imd_amlai_ads_safe.rrs_aml_ai_f_model_result"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+    "hduser1004": {
+        "password": "CRSS@3034#!",
+        "database": "imd_crss_ods_safe"
+    },
+    "hduser1005": {
+        "password": "REGULAR@3054#!",
+        "database": "imd_regular_safe"
+    },
+    "hduser1006": {
+        "password": "RRSDM@3054#!",
+        "database": "imd_dm_safe"
+    },
+    "hduser1007": {
+        "password": "Qa3089Pl!",
+        "database": "imd_rrscrs_safe"
+    },
+    "hduser1009": {
+        "password": "Hduser1009@1234.#",
+        "database": "imd_aml_safe"
+    },
+    "hduser1017": {
+        "password": "Hduser1017@Rrs#",
+        "database": "imd_fbd_safe"
+    },
+    "hduser1030": {
+        "password": "Qa@1236.#",
+        "database": "imd_rirr_safe"
+    },
+    "hduser1040": {
+        "password": "!QAZ2wsx#",
+        "database": "imd_east_dm_safe"
+    },
+    "hduser1080": {
+        "password": "Qa@1236.#",
+        "database": "imd_rdis_dm_safe"
+    },
+    "hduser1088": {
+        "password": "Rdfs@1088#2024",
+        "database": "imd_rdfs_dm_safe"
+    },
+    "hduser1089": {
+        "password": "Rods@1089#2024",
+        "database": "imd_rods_ads_safe"
+    }
+}

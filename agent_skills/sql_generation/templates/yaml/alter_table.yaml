@@ -1,0 +1,14 @@
+type: "alter_table"
+description: "Modify table schema"
+params:
+  table_name: "example_table"
+  operations:
+    - action: "add_columns"
+      columns:
+        - name: "new_col_1"
+          type: "string"
+          comment: "description"
+    - action: "change_column"
+      old_name: "old_col"
+      new_name: "new_col"
+      type: "int"

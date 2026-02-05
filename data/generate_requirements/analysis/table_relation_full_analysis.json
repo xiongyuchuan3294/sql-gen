@@ -1,0 +1,67 @@
+{
+  "mode": "FULL",
+  "dependencies": [
+    {
+      "table": "imd_aml_safe.rrs_aml_black_list_hit_all_dim",
+      "partition": "${run_date_std}"
+    },
+    {
+      "table": "imd_aml_safe.rrs_aml_case_report_final_info",
+      "partition": "date_add('${run_date_std}', -1)"
+    },
+    {
+      "table": "imd_aml_safe.rrs_aml_wash_webank_staff_info_fact",
+      "partition": "${run_date_std}"
+    },
+    {
+      "table": "imd_aml_safe.rrs_aml_dw_ind_trans_di",
+      "partition": "date_sub('${run_date_std}', 31)"
+    },
+    {
+      "table": "imd_aml_safe.rrs_active_hj_t_active_user_log_ip_reflect",
+      "partition": "date_sub('${run_date_std}', 31)"
+    },
+    {
+      "table": "imd_amlai_ads_safe.rrs_aml_ads_network_bad_cust",
+      "partition": "${run_date_std}"
+    },
+    {
+      "table": "imd_amlai_ads_safe.rrs_aml_ads_network_no_finance_amt",
+      "partition": "${run_date_std}"
+    },
+    {
+      "table": "imd_aml_dm_safe.dwd_aml_icust_info_df",
+      "partition": "${run_date_std}"
+    },
+    {
+      "table": "imd_amlai_ads_safe.machine_learn_model",
+      "partition": ""
+    },
+    {
+      "table": "imd_amlai_ads_safe.rrs_aml_ads_community_final_output",
+      "partition": "${run_date_std}"
+    }
+  ],
+  "result_tables": [
+    "imd_amlai_ads_safe.rrs_aml_ads_network_bad_cust",
+    "imd_amlai_ads_safe.rrs_aml_ads_network_no_finance_amt",
+    "imd_amlai_ads_safe.rrs_aml_ads_network_ip_inter_bad",
+    "imd_amlai_ads_safe.rrs_aml_ads_network_dev_inter_bad",
+    "imd_amlai_ads_safe.rrs_aml_ads_network_mac_inter_bad",
+    "imd_amlai_ads_safe.rrs_aml_ads_network_trans_inter_bad",
+    "imd_amlai_ads_safe.rrs_aml_ads_network_trans_direct_bad",
+    "imd_amlai_ads_safe.rrs_aml_ads_network_adr_inter_bad",
+    "imd_amlai_ads_safe.rrs_aml_ads_network_phone_inter_bad",
+    "imd_amlai_ads_safe.rrs_aml_ai_f_model_result"
+  ],
+  "statistics": {
+    "total_tables": 18,
+    "dependencies_count": 10,
+    "result_tables_count": 10,
+    "source_tables_count": 8
+  },
+  "metadata": {
+    "analysis_time": "20260109143429",
+    "analysis_mode": "FULL"
+  }
+}

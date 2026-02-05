@@ -1,0 +1,13 @@
+type: "union_merge"
+description: "Merge results from multiple queries"
+params:
+  union_type: "UNION ALL"
+  queries:
+    - table_name: "table_a"
+      columns: ["id", "name", "category"]
+      partition: "ds='2025-01-01'"
+      condition: "status='active'"
+    - table_name: "table_b"
+      columns: ["id", "name", "category"]
+      partition: "ds='2025-01-02'"
+      condition: "status='active'"

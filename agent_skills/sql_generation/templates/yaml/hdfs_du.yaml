@@ -1,0 +1,11 @@
+type: "hdfs_du"
+description: "Check HDFS path size for multiple targets"
+params:
+  targets:
+    - db: "imd_aml_safe"
+      table: "example_table_A"
+      partition: "ds='2025-01-01'"
+    - db: "imd_aml_safe"
+      table: "example_table_B"
+      partition: "ds='2025-01-02'"
+    - path: "/user/hive/warehouse/custom/path"

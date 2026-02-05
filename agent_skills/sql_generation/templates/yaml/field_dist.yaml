@@ -1,0 +1,9 @@
+type: "field_dist"
+description: "Distribution of values for specific columns"
+params:
+  table_name: "example_table"
+  partition: "ds='2025-01-01'"
+  columns:
+    - "status"
+    - "type"
+  limit: 20
