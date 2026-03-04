@@ -450,6 +450,105 @@ def validate_partition_from_metadata(db_name: str, table_name: str, raw_partitio
     }
 
 
+def get_non_partition_columns(db_name: str, table_name: str, env=None) -> list[str]:
+    """
+    获取表的非分区字段列表
+
+    返回: ["id", "name", "address"]
+    """
+    if not db_name or not table_name:
+        return []
+
+    jdbc_hive_utils, default_env = load_hive_runtime()
+    if jdbc_hive_utils is None:
+        return []
+
+    effective_env = (env or default_env or "local").strip()
+
+    try:
+        # DESCRIBE table 获取所有字段
+        result = jdbc_hive_utils.execute_query(
+            schema=db_name,
+            sql=f"DESCRIBE {table_name}",
+            env=effective_env,
+        )
+
+        # 获取分区字段
+        partition_info = discover_partition_fields(db_name, table_name, env)
+        partition_fields = set(partition_info.get("partition_fields", []))
+
+        # 解析字段（排除分区字段）
+        columns = []
+        for line in result.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            # 跳过空行和分隔行
+            if '#' in line or 'col_name' in line.lower():
+                continue
+            cols = line.split('\t')
+            if cols and cols[0].strip():
+                field_name = cols[0].strip()
+                # 跳过分区字段
+                if field_name not in partition_fields and re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", field_name):
+                    columns.append(field_name)
+
+        return columns
+    except Exception as exc:
+        print(f"Warning: failed to get columns for '{db_name}.{table_name}': {exc}", file=sys.stderr)
+        return []
+    finally:
+        try:
+            jdbc_hive_utils.close_all()
+        except Exception:
+            pass
+
+
+def prepare_data_diff_params(db_name, table_name, source_partition, target_partition, join_keys, env=None):
+    """
+    准备 data_diff 模板的完整参数
+
+    1. 获取表的非分区字段
+    2. 构建完整的模板参数
+
+    返回: {
+        "source_table": "db.table",
+        "target_table": "db.table",
+        "source_partition": "ds='2026-02-01'",
+        "target_partition": "ds='2026-02-01-temp'",
+        "join_keys": ["cust_id"],
+        "non_partition_columns": ["id", "name", "address"],
+    }
+    """
+    # 构建完整表名
+    table_full = f"{db_name}.{table_name}" if db_name else table_name
+
+    # 获取非分区字段
+    non_partition_cols = []
+    if db_name and table_name:
+        try:
+            non_partition_cols = get_non_partition_columns(db_name, table_name, env)
+        except Exception as e:
+            print(f"Warning: failed to get non-partition columns: {e}", file=sys.stderr)
+
+    # 确保有 join_keys
+    if not join_keys:
+        join_keys = ["id"]
+
+    # 确保有非分区字段用于对比
+    if not non_partition_cols:
+        non_partition_cols = join_keys[:1]  # 使用主键作为后备
+
+    return {
+        "source_table": table_full,
+        "target_table": table_full,
+        "source_partition": source_partition,
+        "target_partition": target_partition,
+        "join_keys": join_keys,
+        "non_partition_columns": non_partition_cols,
+    }
+
+
 def expand_hdfs_target(target, env=None):
     """
     Expand a single hdfs_du target to one or more concrete targets.

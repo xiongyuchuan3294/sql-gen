@@ -293,14 +293,21 @@ class ScenarioExecutor:
                     "partition": params.get("partition_where", ""),
                 }
         elif template == "data_diff":
-            step_params = {
-                "source_table": params.get("table_name_full", ""),
-                "target_table": params.get("table_name_full", ""),
-                "source_partition": params.get("partition_where", ""),
-                "target_partition": params.get("target_partition_where", ""),
-                "join_keys": params.get("join_keys", ["id"]),
-                "compare_columns": ["*"],
-            }
+            # 导入 generate 模块获取 data_diff 完整逻辑
+            from generate import prepare_data_diff_params
+
+            db_name = params.get("db", "")
+            table_name = params.get("table_name", "")
+            source_partition = params.get("partition_where", "")
+            target_partition = params.get("target_partition_where", "")
+            join_keys = params.get("join_keys", [])
+
+            # 调用 generate 模块的完整逻辑
+            step_params = prepare_data_diff_params(
+                db_name, table_name,
+                source_partition, target_partition,
+                join_keys, self.env
+            )
         else:
             # 其他模板，使用通用逻辑
             for key, value in step.get("params", {}).items():
