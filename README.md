@@ -11,7 +11,7 @@ This repository is now focused on four capabilities only:
 
 ```text
 agent_skills/sql_generation/   SQL and HDFS template generation
-conf/aml_conf.conf             MySQL named connection profiles
+conf/aml_conf.conf             MySQL profiles + active Hive env selector
 conf/config.py                 Config loader for named profiles
 conf/hive_envs.json            Hive local/remote environment mapping
 tools/hive_client.py           Hive execution utility
@@ -37,9 +37,11 @@ python .\scripts\generate.py --yaml .\templates\yaml\hdfs_du.yaml
 ## Hive Execution
 
 Hive environments are configured in `conf/hive_envs.json`.
+The active default env is selected in `conf/aml_conf.conf` via `[hive].active_env`.
 
 - `env=uat` uses the remote Hive connection
 - `env=local` uses the local debug environment under `D:\workspace\hive-local-test`
+- `env=local_hs2` uses the local HiveServer2 endpoint from `conf/hive_envs.json`
 
 Start the MCP server:
 

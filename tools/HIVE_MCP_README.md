@@ -2,16 +2,22 @@
 
 `tools/hive_exec_server.py` provides an MCP server for querying Hive-compatible data sources.
 
-It supports two execution modes:
+It supports three execution modes:
 
 - `env=uat`: real remote Hive execution for intranet environments
 - `env=local`: local debug execution backed by `D:\workspace\hive-local-test`
+- `env=local_hs2`: local HiveServer2 connection (host/port in `conf/hive_envs.json`)
 
 The server delegates execution to `tools/hive_client.py`.
 
-Default environment selection is controlled by the code variable
-`DEFAULT_HIVE_ENV` in `tools/hive_client.py`. It is set to `uat` by default.
-If you want all calls that omit `env` to use local mode, change it to `local`.
+Default environment selection is controlled by `conf/aml_conf.conf`:
+
+```ini
+[hive]
+active_env = local_hs2
+```
+
+Calls that omit `env` will use `[hive].active_env`.
 
 ## Files
 
@@ -22,6 +28,7 @@ tools/
 `-- HIVE_MCP_README.md
 
 conf/
+|-- aml_conf.conf
 `-- hive_envs.json
 ```
 
@@ -70,9 +77,8 @@ This file contains:
 
 - shared `hive_conf`
 - remote environments such as `uat`
+- local HiveServer2 environments such as `local_hs2`
 - the local debug environment `local`
-
-The code also accepts `local_test` as an alias for `local`.
 
 Example:
 
@@ -133,18 +139,13 @@ $env:HIVE_ENV_CONFIG_PATH = "D:\custom\hive_envs.json"
 python .\tools\hive_exec_server.py
 ```
 
-### Change the default environment in code
+### Change the default environment
 
-Edit `tools/hive_client.py`:
+Edit `conf/aml_conf.conf` and update:
 
-```python
-DEFAULT_HIVE_ENV = "uat"
-```
-
-Change it to:
-
-```python
-DEFAULT_HIVE_ENV = "local"
+```ini
+[hive]
+active_env = local
 ```
 
 This affects callers that omit `env`. Explicit `env` parameters still win.
@@ -159,7 +160,7 @@ Parameters:
 
 - `schema`: database name
 - `sql`: query text
-- `env`: environment name, default `uat`
+- `env`: environment name, defaults to `conf/aml_conf.conf` `[hive].active_env`
 
 Example:
 

@@ -6,7 +6,10 @@
       "Bash(\".venv/Scripts/python.exe\":*)",
       "Bash(\".venv/Scripts/pip.exe\" install mcp fastmcp)",
       "Bash(pip install:*)",
-      "Bash(claude mcp list:*)"
+      "Bash(claude mcp list:*)",
+      "Bash(python tools/test_hive_exec.py:*)",
+      "Bash(python -c:*)",
+      "Bash(python:*)"
     ]
   }
 }

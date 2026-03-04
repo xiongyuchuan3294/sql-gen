@@ -13,8 +13,8 @@ sys.path.insert(0, str(project_root))
 from mcp.server.fastmcp import FastMCP
 
 from tools.hive_client import (
-    DEFAULT_HIVE_ENV,
     HiveConnectionManager,
+    HiveRuntimeConfig,
     JdbcHiveUtils,
 )
 
@@ -44,7 +44,7 @@ def _query_error(exc: Exception) -> str:
 def hive_execute_query(
     schema: str,
     sql: str,
-    env: str = DEFAULT_HIVE_ENV,
+    env: str | None = None,
 ) -> str:
     """Execute a Hive query."""
     normalized_env = _normalize_env(env)
@@ -67,7 +67,7 @@ def hive_execute_query(
 def hive_describe_table(
     schema: str,
     table_name: str,
-    env: str = DEFAULT_HIVE_ENV,
+    env: str | None = None,
 ) -> str:
     """Describe a table structure."""
     normalized_env = _normalize_env(env)
@@ -92,7 +92,7 @@ def hive_count_records(
     schema: str,
     table_name: str,
     partition_filter: str | None = None,
-    env: str = DEFAULT_HIVE_ENV,
+    env: str | None = None,
 ) -> str:
     """Count records in a table."""
     normalized_env = _normalize_env(env)
@@ -121,7 +121,7 @@ def hive_preview_data(
     table_name: str,
     partition_filter: str | None = None,
     limit: int = 10,
-    env: str = DEFAULT_HIVE_ENV,
+    env: str | None = None,
 ) -> str:
     """Preview table data."""
     normalized_env = _normalize_env(env)
@@ -149,7 +149,7 @@ def hive_preview_data(
 def hive_execute_dml(
     schema: str,
     sql: str,
-    env: str = DEFAULT_HIVE_ENV,
+    env: str | None = None,
 ) -> str:
     """Execute DDL or DML."""
     normalized_env = _normalize_env(env)
@@ -173,7 +173,7 @@ def hive_execute_dml(
 )
 def hive_show_tables(
     schema: str,
-    env: str = DEFAULT_HIVE_ENV,
+    env: str | None = None,
 ) -> str:
     """Show all tables in the given schema."""
     normalized_env = _normalize_env(env)
@@ -202,7 +202,7 @@ def hive_close_connections() -> str:
 if __name__ == "__main__":
     logger.info(
         "Start Hive execution MCP server. default_env=%s supported_envs=%s",
-        DEFAULT_HIVE_ENV,
+        HiveRuntimeConfig.active_env(),
         ",".join(HiveConnectionManager.supported_envs()),
     )
     mcp.run()

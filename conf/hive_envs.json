@@ -12,6 +12,12 @@
       "python": "D:\\workspace\\hive-local-test\\.venv\\Scripts\\python.exe",
       "runner": "D:\\workspace\\hive-local-test\\run_hive_sql.py"
     },
+    "local_hs2": {
+      "mode": "local_hs2",
+      "host": "127.0.0.1",
+      "port": 10000,
+      "username": "xiongyuc"
+    },
     "uat": {
       "mode": "remote",
       "host": "172.21.1.168",

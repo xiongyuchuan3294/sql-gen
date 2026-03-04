@@ -27,7 +27,7 @@ python scripts/generate_template_guide.py
 4. If the user gives a business need instead of a template name, recommend the closest template first.
 5. Do not invent templates that do not exist in `templates/yaml/`.
 
-## Current SQL Templates (15)
+## Current SQL Templates (17)
 
 | Type | Purpose | Key Params | Renderer |
 | --- | --- | --- | --- |
@@ -35,6 +35,7 @@ python scripts/generate_template_guide.py
 | `anti_join` | Find records in source but missing in target | `source_table`, `target_table`, `source_partition`, `target_partition`, `join_keys[]` | `templates/sql/anti_join.sql` |
 | `batch_data_num` | Count rows for multiple tables in batch | `tables[].name`, `tables[].partition` | `templates/sql/batch_data_num.sql` |
 | `check_field_len` | Find longest values in a column | `table_name`, `partition`, `column`, `limit` | `templates/sql/check_field_len.sql` |
+| `create_temp_partition` | 为分区表创建空白的 temp 分区 | `table_name`, `db`, `partition` | `templates/sql/create_temp_partition.sql` |
 | `data_clean` | Clean/Filter data using Insert Overwrite | `table_name`, `partition`, `filter_condition`, `columns[]` | `templates/sql/data_clean.sql` |
 | `data_diff` | Compare two tables/partitions for differences | `source_table`, `target_table`, `source_partition`, `target_partition`, `join_keys[]`, `compare_columns[]` | `templates/sql/data_diff.sql` |
 | `data_num` | Count total rows in a partition | `table_name`, `partition` | `templates/sql/data_num.sql` |
@@ -42,6 +43,7 @@ python scripts/generate_template_guide.py
 | `field_dist` | Distribution of values for specific columns | `table_name`, `partition`, `columns[]`, `limit` | `templates/sql/field_dist.sql` |
 | `group_top_n` | Window function to get Top N per group | `table_name`, `partition`, `partition_by[]`, `order_by`, `limit_n` | `templates/sql/group_top_n.sql` |
 | `insert_values` | Insert specific values into a table (Mock Data) | `table_name`, `partition`, `data_rows[]` | `templates/sql/insert_values.sql` |
+| `move_partition` | 将分区数据移动到另一个分区（如备份到 temp 分区） | `table_name`, `db`, `source_partition`, `target_partition` | `templates/sql/move_partition.sql` |
 | `null_checks` | Check for null values in specific columns | `table_name`, `partition`, `columns[]` | `templates/sql/null_checks.sql` |
 | `null_rate` | Calculate null rate for columns | `table_name`, `partition`, `columns[]` | `templates/sql/null_rate.sql` |
 | `repeat_check` | Check for duplicate keys | `table_name`, `partition`, `group_by_columns[]`, `having_threshold` | `templates/sql/repeat_check.sql` |
@@ -51,7 +53,7 @@ python scripts/generate_template_guide.py
 
 | Type | Purpose | Key Params | Renderer |
 | --- | --- | --- | --- |
-| `hdfs_du` | Check HDFS path size for multiple targets | `targets[].db`, `targets[].table`, `targets[].partition`, `targets[].path` | `templates/shell/hdfs_du.sh` |
+| `hdfs_du` | Check HDFS path size for multiple targets | `targets[].db`, `targets[].table`, `targets[].dbs[]`, `targets[].path` | `templates/shell/hdfs_du.sh` |
 
 ## Chinese Prompt Examples
 - 目前有哪些可用的 SQL 模板？

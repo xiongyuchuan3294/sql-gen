@@ -2,7 +2,14 @@ type: "hdfs_du"
 description: "Check HDFS path size for multiple targets"
 params:
   targets:
+    # Recommended: explicit db + table
     - db: "imd_aml_safe"
+      table: "table_name"
+    # Optional: table-only. Generator will discover matching db(s) from current Hive env.
+    # If discovery fails, it will render path without db segment.
+    - table: "t_sql_hdfs_smoke"
+    # Optional: db list + table (batch expansion)
+    - dbs: ["imd_dm_safe", "imd_rdfs_dm_safe"]
       table: "table_name"
     - db: "imd_aml_dm_safe"
       table: "table_name"

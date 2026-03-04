@@ -12,12 +12,16 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from tools.hive_client import DEFAULT_HIVE_ENV, JdbcHiveUtils
+from tools.hive_client import HiveRuntimeConfig, JdbcHiveUtils
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Smoke test Hive execution.")
-    parser.add_argument("--env", default=DEFAULT_HIVE_ENV, help="Hive environment name.")
+    parser.add_argument(
+        "--env",
+        default=HiveRuntimeConfig.active_env(),
+        help="Hive environment name. Defaults to conf/aml_conf.conf [hive].active_env.",
+    )
     parser.add_argument("--schema", default="local_test", help="Schema name.")
     parser.add_argument(
         "--sql",

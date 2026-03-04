@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import configparser
 import contextlib
 import json
 import locale
@@ -22,16 +23,6 @@ try:
     from pyhive import hive
 except ImportError:  # pragma: no cover - handled at runtime for remote envs
     hive = None
-
-
-# Change this to "local" when you want all callers that omit env to use
-# the local debug Hive environment by default.
-DEFAULT_HIVE_ENV = "local"
-
-# Accept a few common aliases to reduce accidental remote fallback.
-HIVE_ENV_ALIASES = {
-    "local_test": "local",
-}
 
 
 class LocalHiveProcessExecutor:
@@ -220,17 +211,19 @@ class LocalHiveProcessExecutor:
 
 class HiveConnectionManager:
     LOCAL_ENV = "local"
+    REMOTE_LIKE_MODES = {"remote", "local_hs2"}
     _lock = threading.Lock()
     _connections = OrderedDict()
 
     @classmethod
     def normalize_env(cls, env: str | None = None) -> str:
-        normalized_env = (env or DEFAULT_HIVE_ENV).strip().lower()
-        return HIVE_ENV_ALIASES.get(normalized_env, normalized_env)
+        normalized_env = str(env or HiveRuntimeConfig.active_env()).strip().lower()
+        return normalized_env or HiveRuntimeConfig.DEFAULT_ACTIVE_ENV
 
     @classmethod
     def is_local_env(cls, env: str | None = None) -> bool:
-        return cls.normalize_env(env) == cls.LOCAL_ENV
+        config = HiveRuntimeConfig.get_env_config(env)
+        return str(config.get("mode", "")).strip().lower() == cls.LOCAL_ENV
 
     @classmethod
     def supported_envs(cls):
@@ -239,8 +232,22 @@ class HiveConnectionManager:
     @classmethod
     def get_connection(cls, env: str | None = None, schema="default"):
         normalized_env = cls.normalize_env(env)
-        if cls.is_local_env(normalized_env):
+        config = HiveRuntimeConfig.get_env_config(normalized_env)
+        if not config:
+            supported = ", ".join(cls.supported_envs())
+            raise ValueError(
+                f"Invalid environment: {normalized_env}. Supported environments: {supported}"
+            )
+
+        mode = str(config.get("mode", "")).strip().lower()
+        if mode == cls.LOCAL_ENV:
             raise ValueError("Local mode does not use a remote Hive connection.")
+        if mode not in cls.REMOTE_LIKE_MODES:
+            supported_modes = ", ".join(sorted(cls.REMOTE_LIKE_MODES | {cls.LOCAL_ENV}))
+            raise ValueError(
+                f"Environment {normalized_env} has unsupported mode '{mode}'. "
+                f"Supported modes: {supported_modes}."
+            )
 
         if hive is None:
             raise ImportError(
@@ -252,17 +259,6 @@ class HiveConnectionManager:
         with cls._lock:
             if connection_key in cls._connections:
                 return cls._connections[connection_key]
-
-            config = HiveRuntimeConfig.get_env_config(normalized_env)
-            if not config:
-                supported = ", ".join(cls.supported_envs())
-                raise ValueError(
-                    f"Invalid environment: {env}. Supported environments: {supported}"
-                )
-            if config.get("mode", "remote") != "remote":
-                raise ValueError(
-                    f"Environment {env} is not configured as a remote Hive connection."
-                )
 
             auth = "LDAP" if config.get("password") else None
             try:
@@ -351,6 +347,10 @@ class JdbcHiveUtils:
 
 class HiveRuntimeConfig:
     DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "conf" / "hive_envs.json"
+    DEFAULT_AML_CONF_PATH = Path(__file__).resolve().parent.parent / "conf" / "aml_conf.conf"
+    DEFAULT_ACTIVE_ENV = "local"
+    ACTIVE_ENV_SECTION = "hive"
+    ACTIVE_ENV_OPTION = "active_env"
     DEFAULT_CONFIG = {
         "hive_conf": {
             "mapreduce.job.queuename": "queue_1006_01",
@@ -364,6 +364,12 @@ class HiveRuntimeConfig:
                 "root": r"D:\workspace\hive-local-test",
                 "python": r"D:\workspace\hive-local-test\.venv\Scripts\python.exe",
                 "runner": r"D:\workspace\hive-local-test\run_hive_sql.py",
+            },
+            "local_hs2": {
+                "mode": "local_hs2",
+                "host": "127.0.0.1",
+                "port": 10000,
+                "username": "xiongyuc",
             },
             "uat": {
                 "mode": "remote",
@@ -400,7 +406,29 @@ class HiveRuntimeConfig:
         return environments
 
     @classmethod
-    def get_env_config(cls, env: str) -> dict:
+    def active_env(cls) -> str:
+        override = os.environ.get("HIVE_ACTIVE_ENV", "").strip().lower()
+        if override:
+            return override
+
+        conf_path = Path(
+            os.environ.get("AML_CONF_PATH", str(cls.DEFAULT_AML_CONF_PATH))
+        )
+        parser = configparser.ConfigParser()
+        if conf_path.exists():
+            parser.read(conf_path, encoding="utf-8")
+            selected = parser.get(
+                cls.ACTIVE_ENV_SECTION,
+                cls.ACTIVE_ENV_OPTION,
+                fallback="",
+            ).strip().lower()
+            if selected:
+                return selected
+
+        return cls.DEFAULT_ACTIVE_ENV
+
+    @classmethod
+    def get_env_config(cls, env: str | None) -> dict:
         normalized_env = HiveConnectionManager.normalize_env(env)
         return cls.environments().get(normalized_env, {})
 

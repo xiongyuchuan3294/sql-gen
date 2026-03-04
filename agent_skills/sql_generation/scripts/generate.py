@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import argparse
 import os
+import re
 import sys
+from functools import lru_cache
 
 try:
     import yaml
@@ -21,6 +23,11 @@ HDFS_WAREHOUSE_USER_BY_DB = {
     "imd_dm_safe": "hduser1006",
     "imd_rdfs_dm_safe": "hduser1088",
 }
+
+
+def find_repo_root():
+    """Find the root of the sql-gen repository."""
+    return os.path.abspath(os.path.join(find_project_root(), "..", ".."))
 
 
 def find_project_root():
@@ -49,6 +56,446 @@ def sanitize_partition(partition):
     return str(partition).replace("'", "").strip().strip("/;")
 
 
+def normalize_table_name(table_name):
+    if not table_name:
+        return ""
+    candidate = str(table_name).strip()
+    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", candidate):
+        return candidate
+    return ""
+
+
+def parse_first_column_rows(result_text):
+    if not result_text:
+        return []
+
+    raw_lines = [line.strip() for line in str(result_text).splitlines() if line.strip()]
+    if not raw_lines:
+        return []
+
+    # Skip CLI table borders if they appear in output.
+    filtered = []
+    for line in raw_lines:
+        if set(line) <= set("+-| "):
+            continue
+        filtered.append(line)
+    if not filtered:
+        return []
+
+    # Hive outputs header + rows; keep rows only.
+    data_lines = filtered[1:] if len(filtered) >= 2 else []
+    values = []
+    for line in data_lines:
+        first_col = line.split("\t")[0].strip()
+        if first_col:
+            values.append(first_col)
+    return values
+
+
+@lru_cache(maxsize=1)
+def load_hive_runtime():
+    repo_root = find_repo_root()
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+    try:
+        from tools.hive_client import HiveRuntimeConfig, JdbcHiveUtils
+    except Exception:
+        return None, None
+
+    try:
+        default_env = HiveRuntimeConfig.active_env()
+    except Exception:
+        default_env = "local"
+
+    return JdbcHiveUtils, default_env
+
+
+def discover_db_names_by_table(table_name, env=None):
+    table = normalize_table_name(table_name)
+    if not table:
+        return []
+
+    jdbc_hive_utils, default_env = load_hive_runtime()
+    if jdbc_hive_utils is None:
+        print(
+            "Warning: tools.hive_client is unavailable. Skip table->db discovery.",
+            file=sys.stderr,
+        )
+        return []
+
+    effective_env = (env or default_env or "local").strip()
+    discovered = []
+
+    try:
+        databases_output = jdbc_hive_utils.execute_query(
+            schema="default",
+            sql="SHOW DATABASES",
+            env=effective_env,
+        )
+        databases = parse_first_column_rows(databases_output)
+        for db_name in databases:
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", db_name):
+                continue
+            tables_output = jdbc_hive_utils.execute_query(
+                schema=db_name,
+                sql=f"SHOW TABLES LIKE '{table}'",
+                env=effective_env,
+            )
+            table_rows = parse_first_column_rows(tables_output)
+            if any(value == table for value in table_rows):
+                discovered.append(db_name)
+    except Exception as exc:
+        print(
+            f"Warning: failed to discover db for table '{table}' in env '{effective_env}': {exc}",
+            file=sys.stderr,
+        )
+        return []
+    finally:
+        try:
+            jdbc_hive_utils.close_all()
+        except Exception:
+            pass
+
+    # Keep order and remove duplicates.
+    unique = []
+    seen = set()
+    for db_name in discovered:
+        if db_name in seen:
+            continue
+        seen.add(db_name)
+        unique.append(db_name)
+    return unique
+
+
+def discover_partition_fields(db_name, table_name, env=None):
+    """
+    发现表的分区字段
+
+    返回: {
+        "is_partitioned": True/False,
+        "partition_fields": ["ds"] 或 ["ds", "hour"]
+    }
+    """
+    if not db_name or not table_name:
+        return {"is_partitioned": False, "partition_fields": []}
+
+    jdbc_hive_utils, default_env = load_hive_runtime()
+    if jdbc_hive_utils is None:
+        return {"is_partitioned": False, "partition_fields": []}
+
+    effective_env = (env or default_env or "local").strip()
+
+    try:
+        # 使用 DESCRIBE FORMATTED 获取分区信息
+        result = jdbc_hive_utils.execute_query(
+            schema=db_name,
+            sql=f"DESCRIBE FORMATTED {table_name}",
+            env=effective_env,
+        )
+        return parse_partition_fields_from_desc(result)
+    except Exception as exc:
+        print(
+            f"Warning: failed to discover partitions for '{db_name}.{table_name}': {exc}",
+            file=sys.stderr,
+        )
+        return {"is_partitioned": False, "partition_fields": []}
+    finally:
+        try:
+            jdbc_hive_utils.close_all()
+        except Exception:
+            pass
+
+
+def parse_partition_fields_from_desc(desc_output):
+    """
+    解析 DESCRIBE FORMATTED 输出，提取分区字段
+
+    返回: {
+        "is_partitioned": True/False,
+        "partition_fields": ["ds", "hour"]
+    }
+    """
+    if not desc_output:
+        return {"is_partitioned": False, "partition_fields": []}
+
+    partitions = []
+    in_partition_section = False
+    skip_header_line = False
+    lines = desc_output.split('\n')
+
+    for line in lines:
+        if '# Partition Information' in line:
+            in_partition_section = True
+            skip_header_line = True  # 下一行是 # col_name data_type comment
+            continue
+
+        if in_partition_section:
+            stripped = line.strip()
+
+            # 跳过 header 行 (# col_name data_type comment)
+            if skip_header_line:
+                skip_header_line = False
+                continue
+
+            # 检查是否到达下一个 # 开头的新section
+            if stripped.startswith('# '):
+                break
+
+            # 跳过空行和 NULL 行
+            if not stripped or 'NULL' in stripped:
+                continue
+
+            # 解析分区字段（取第一列）
+            cols = stripped.split('\t')
+            if cols and cols[0].strip():
+                field_name = cols[0].strip()
+                if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", field_name):
+                    partitions.append(field_name)
+
+    return {
+        "is_partitioned": len(partitions) > 0,
+        "partition_fields": partitions
+    }
+
+
+def validate_partition_params(table_metadata, user_partitions):
+    """
+    校验分区参数
+
+    table_metadata: {
+        "is_partitioned": True/False,
+        "partition_fields": ["ds", "hour"]
+    }
+    user_partitions: {
+        "ds": "2026-02-01",
+        "hour": "23"
+    }
+
+    返回: {
+        "valid": True/False,
+        "message": "错误信息（如果无效）",
+        "missing_fields": ["hour"]（缺失的字段）
+    }
+    """
+    if not table_metadata["is_partitioned"]:
+        # 非分区表，直接通过
+        return {"valid": True, "message": None, "missing_fields": []}
+
+    required_fields = table_metadata["partition_fields"]
+    provided_fields = list(user_partitions.keys()) if user_partitions else []
+
+    # 1. 检查是否指定了任何分区
+    if not provided_fields:
+        return {
+            "valid": False,
+            "message": f"【参数缺失】该表是分区表，分区字段为: {required_fields}，请指定分区值，如 {required_fields[0]}='2026-02-01'",
+            "missing_fields": required_fields
+        }
+
+    # 2. 检查是否缺少必需的分区字段
+    missing = set(required_fields) - set(provided_fields)
+    if missing:
+        return {
+            "valid": False,
+            "message": f"【参数缺失】该表有二级分区 {list(missing)}，请补充指定",
+            "missing_fields": list(missing)
+        }
+
+    return {"valid": True, "message": None, "missing_fields": []}
+
+
+def validate_join_keys(join_keys):
+    """
+    校验主键参数
+
+    join_keys: ["id"] 或 ["id", "user_id"]
+
+    返回: {
+        "valid": True/False,
+        "message": "错误信息（如果无效）"
+    }
+    """
+    if not join_keys or len(join_keys) == 0:
+        return {
+            "valid": False,
+            "message": "【参数缺失】请提供主键字段（join_keys），用于数据对比"
+        }
+
+    return {"valid": True, "message": None}
+
+
+def extract_partition_from_text(text: str) -> dict:
+    """
+    从用户输入文本中提取分区参数
+
+    支持格式:
+    - ds=2026-02-01
+    - ds='2026-02-01'
+    - 2026-02-01 分区
+    - 的 2026-02-01 分区
+
+    返回: {
+        "raw_partition": "ds=2026-02-01,hour=23",
+        "partition_fields": ["ds"],  # 推断的分区字段
+    }
+    """
+    import re
+    params = {}
+    partition_parts = []
+
+    # 格式1: field=value 或 field='value'
+    partition_pattern = r"([a-zA-Z_][a-zA-Z0-9_]*)=['\"]?([^'\"\\s]+)['\"]?"
+    matches = re.findall(partition_pattern, text)
+    for field, value in matches:
+        partition_parts.append(f"{field}={value}")
+
+    # 格式2: 自然语言 "2026-02-01 分区"
+    if not partition_parts:
+        natural_pattern = r"(?:的|在|分区)?\s*(\d{4}[-/]\d{2}[-/]\d{2})\s*(?:分区|号)?"
+        natural_matches = re.findall(natural_pattern, text)
+        if natural_matches:
+            # 推断使用 ds 作为分区字段
+            for value in natural_matches:
+                partition_parts.append(f"ds={value.replace('/', '-')}")
+
+    # 格式3: hour=23 或 23点
+    hour_pattern = r"(?:hour|时)\s*=\s*(\d{1,2})|(\d{1,2})\s*(?:点|时|hour)"
+    hour_matches = re.findall(hour_pattern, text)
+    for match in hour_matches:
+        hour_value = match[0] or match[1]
+        partition_parts.append(f"hour={hour_value}")
+
+    if partition_parts:
+        params["raw_partition"] = ",".join(partition_parts)
+
+    return params
+
+
+def validate_partition_from_metadata(db_name: str, table_name: str, raw_partition: str, env=None) -> dict:
+    """
+    通过元数据校验分区参数
+
+    1. 发现表的分区字段
+    2. 校验用户提供的分区是否完整
+    3. 如果用户未提供分区，返回提示
+
+    返回: {
+        "valid": True/False,
+        "message": "错误信息",
+        "partition_fields": ["ds", "hour"],
+        "formatted_partition": "ds='2026-02-01',hour='23'"
+    }
+    """
+    import re
+
+    # 1. 发现分区字段
+    metadata = discover_partition_fields(db_name, table_name, env)
+    is_partitioned = metadata.get("is_partitioned", False)
+    partition_fields = metadata.get("partition_fields", [])
+
+    # 2. 如果非分区表，直接通过
+    if not is_partitioned:
+        return {
+            "valid": True,
+            "message": None,
+            "partition_fields": [],
+            "is_partitioned": False,
+            "formatted_partition": ""
+        }
+
+    # 3. 解析用户提供的分区
+    user_partitions = {}
+    if raw_partition:
+        for part in raw_partition.split(","):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                v = v.strip().strip("'\"")
+                user_partitions[k] = v
+
+    # 4. 校验是否提供了分区
+    if not user_partitions:
+        return {
+            "valid": False,
+            "message": f"【参数缺失】该表是分区表，分区字段为: {partition_fields}，请指定分区值，如 {partition_fields[0]}='2026-02-01'",
+            "partition_fields": partition_fields,
+            "is_partitioned": True,
+            "formatted_partition": ""
+        }
+
+    # 5. 校验是否缺少分区字段
+    missing = set(partition_fields) - set(user_partitions.keys())
+    if missing:
+        return {
+            "valid": False,
+            "message": f"【参数缺失】该表有二级分区 {list(missing)}，请补充指定",
+            "partition_fields": partition_fields,
+            "is_partitioned": True,
+            "formatted_partition": ""
+        }
+
+    # 6. 格式化分区
+    formatted_parts = []
+    for field in partition_fields:
+        value = user_partitions.get(field, "")
+        if value:
+            formatted_parts.append(f"{field}='{value}'")
+
+    return {
+        "valid": True,
+        "message": None,
+        "partition_fields": partition_fields,
+        "is_partitioned": True,
+        "formatted_partition": ",".join(formatted_parts)
+    }
+
+
+def expand_hdfs_target(target, env=None):
+    """
+    Expand a single hdfs_du target to one or more concrete targets.
+    Supports:
+    - path-only
+    - db + table
+    - dbs + table
+    - table-only (auto discover db from the current Hive env)
+    """
+    if target.get("path"):
+        return [dict(target)]
+
+    table_name = target.get("table")
+    db_name = target.get("db")
+    db_names = target.get("dbs")
+
+    if db_name and table_name:
+        return [dict(target)]
+
+    if isinstance(db_names, list) and table_name:
+        expanded = []
+        for item in db_names:
+            current_db = str(item).strip()
+            if not current_db:
+                continue
+            current_target = dict(target)
+            current_target["db"] = current_db
+            expanded.append(current_target)
+        return expanded
+
+    if table_name and not db_name:
+        discovered = discover_db_names_by_table(table_name, env=env)
+        if discovered:
+            expanded = []
+            for discovered_db in discovered:
+                current_target = dict(target)
+                current_target["db"] = discovered_db
+                expanded.append(current_target)
+            return expanded
+
+        # Keep table-only target and render path without db segment.
+        return [dict(target)]
+
+    return [dict(target)]
+
+
 def build_hdfs_target_path(target):
     path = target.get("path")
     if path:
@@ -56,14 +503,17 @@ def build_hdfs_target_path(target):
 
     db_name = target.get("db")
     table_name = target.get("table")
-    if not db_name or not table_name:
+    if not table_name:
         return ""
 
     warehouse_user = target.get("warehouse_user") or HDFS_WAREHOUSE_USER_BY_DB.get(
         db_name,
         DEFAULT_HDFS_WAREHOUSE_USER,
     )
-    hdfs_path = f"/user/hive/warehouse/{warehouse_user}/{db_name}.db/{table_name}"
+    if db_name:
+        hdfs_path = f"/user/hive/warehouse/{warehouse_user}/{db_name}.db/{table_name}"
+    else:
+        hdfs_path = f"/user/hive/warehouse/{warehouse_user}/{table_name}"
 
     partition = sanitize_partition(target.get("partition"))
     if partition:
@@ -72,16 +522,17 @@ def build_hdfs_target_path(target):
     return hdfs_path
 
 
-def prepare_params(template_name, params):
+def prepare_params(template_name, params, env=None):
     if template_name != "hdfs_du":
         return params
 
     prepared_params = dict(params or {})
     prepared_targets = []
     for target in prepared_params.get("targets", []):
-        prepared_target = dict(target)
-        prepared_target["hdfs_path"] = build_hdfs_target_path(prepared_target)
-        prepared_targets.append(prepared_target)
+        for expanded_target in expand_hdfs_target(target, env=env):
+            prepared_target = dict(expanded_target)
+            prepared_target["hdfs_path"] = build_hdfs_target_path(prepared_target)
+            prepared_targets.append(prepared_target)
     prepared_params["targets"] = prepared_targets
     return prepared_params
 
@@ -114,6 +565,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate Hive SQL from YAML config.")
     parser.add_argument('--yaml', required=True, help="Path to YAML configuration file")
     parser.add_argument('--template', help="Template name (defaults to 'type' in YAML)")
+    parser.add_argument('--env', help="Hive env name for table->db discovery (e.g. local, uat)")
     
     args = parser.parse_args()
     
@@ -129,7 +581,11 @@ def main():
             sys.exit(1)
             
     # Render
-    params = prepare_params(template_name, config.get('params', {}))
+    params = prepare_params(
+        template_name,
+        config.get('params', {}),
+        env=args.env,
+    )
     content, ext = render_template(template_name, params)
     
     print("-" * 20 + f" Generated {ext.upper()} " + "-" * 20)
