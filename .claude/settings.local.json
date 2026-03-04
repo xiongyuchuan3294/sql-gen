@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where:*)",
+      "Bash(D:workspacesql-gen.venvScriptspython.exe -c \"import mcp; print\\(''MCP installed''\\)\")",
+      "Bash(\".venv/Scripts/python.exe\":*)",
+      "Bash(\".venv/Scripts/pip.exe\" install mcp fastmcp)",
+      "Bash(pip install:*)",
+      "Bash(claude mcp list:*)"
+    ]
+  }
+}

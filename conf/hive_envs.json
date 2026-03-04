@@ -1,0 +1,23 @@
+{
+  "hive_conf": {
+    "mapreduce.job.queuename": "queue_1006_01",
+    "hive.exec.mode.local.auto": "true",
+    "hive.exec.mode.local.auto.inputbytes.max": "100000000",
+    "hive.exec.mode.local.auto.input.files.max": "50"
+  },
+  "environments": {
+    "local": {
+      "mode": "local",
+      "root": "D:\\workspace\\hive-local-test",
+      "python": "D:\\workspace\\hive-local-test\\.venv\\Scripts\\python.exe",
+      "runner": "D:\\workspace\\hive-local-test\\run_hive_sql.py"
+    },
+    "uat": {
+      "mode": "remote",
+      "host": "172.21.1.168",
+      "port": 10000,
+      "username": "hduser1009",
+      "password": "Hduser1009@1234.#"
+    }
+  }
+}
