@@ -1,0 +1,4 @@
+params:
+  partition: ds='2026-02-01'
+  table_name: imd_aml_safe.t_local_hs2_aml_safe_p_ds
+type: data_num

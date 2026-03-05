@@ -1,0 +1,9 @@
+name: group_top_n
+params:
+  limit_n: 3
+  order_by: id DESC
+  partition: ds='2026-02-01'
+  partition_by:
+  - name
+  table_name: imd_aml_safe.t_local_hs2_aml_safe_demo
+type: group_top_n

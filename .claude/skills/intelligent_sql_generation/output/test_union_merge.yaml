@@ -1,0 +1,17 @@
+name: union_merge
+params:
+  queries:
+  - columns:
+    - id
+    - name
+    condition: name='test'
+    partition: ds='2026-02-01'
+    table_name: imd_aml_safe.t_local_hs2_aml_safe_demo
+  - columns:
+    - id
+    - name
+    condition: name='test'
+    partition: ds='2026-02-01'
+    table_name: imd_amlai_ads_safe.t_local_hs2_amlai_ads_safe_demo
+  union_type: UNION ALL
+type: union_merge

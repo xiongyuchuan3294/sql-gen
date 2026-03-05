@@ -1,0 +1,13 @@
+----------------------------------------------------------------
+Thu Mar 05 10:13:06 CST 2026:
+Booting Derby version The Apache Software Foundation - Apache Derby - 10.16.1.1 - (1901046): instance a816c00e-019c-bbc5-2898-000001a00000 
+on database directory D:\workspace\hive-hs2-local\metastore_db with class loader jdk.internal.loader.ClassLoaders$AppClassLoader@7a81197d 
+Loaded from file:/D:/workspace/hive-local-test/.venv/Lib/site-packages/pyspark/jars/derby-10.16.1.1.jar
+java.vendor=Eclipse Adoptium
+java.runtime.version=21.0.8+9-LTS
+user.dir=D:\workspace\sql-gen
+os.name=Windows 11
+os.arch=amd64
+os.version=10.0
+derby.system.home=null
+Database Class Loader started - derby.database.classpath=''

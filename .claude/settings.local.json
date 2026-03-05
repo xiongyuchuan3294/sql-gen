@@ -9,7 +9,26 @@
       "Bash(claude mcp list:*)",
       "Bash(python tools/test_hive_exec.py:*)",
       "Bash(python -c:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(pip show:*)",
+      "Bash(curl:*)",
+      "Bash(findstr:*)",
+      "Bash(.venv/Scripts/pip install:*)",
+      "Bash(D:/workspace/sql-gen/.venv/Scripts/pip.exe install sasl thrift-sasl)",
+      "Bash(D:/workspace/sql-gen/.venv/Scripts/pip.exe install:*)",
+      "Bash(D:/workspace/sql-gen/.venv/Scripts/python.exe -m pip:*)",
+      "Bash(D:/workspace/sql-gen/.venv/Scripts/python.exe -c:*)",
+      "Bash(.venv/Scripts/python.exe:*)"
     ]
-  }
+  },
+  "skills": [
+    {
+      "name": "intelligent_sql_generation",
+      "path": "skills/ntelligent_sql_generation/SKILL.md"
+    },
+    {
+      "name": "sql_scenario_execution",
+      "path": "skills/sql_scenario_execution/SKILL.md"
+    }
+  ]
 }

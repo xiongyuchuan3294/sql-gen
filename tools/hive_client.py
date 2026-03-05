@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """Hive connection and execution helpers."""
@@ -23,6 +23,13 @@ try:
     from pyhive import hive
 except ImportError:  # pragma: no cover - handled at runtime for remote envs
     hive = None
+
+try:
+    from impala.dbapi import connect as impala_connect
+    IMPALA_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    impala_connect = None
+    IMPALA_AVAILABLE = False
 
 
 class LocalHiveProcessExecutor:
@@ -51,26 +58,28 @@ class LocalHiveProcessExecutor:
         return payload.decode("utf-8", errors="replace")
 
     @classmethod
-    def _config(cls):
-        config = HiveRuntimeConfig.get_env_config(HiveConnectionManager.LOCAL_ENV)
-        root = Path(
-            os.environ.get(
-                "LOCAL_HIVE_ROOT",
-                config.get("root", r"D:\workspace\hive-local-test"),
+    def _config(cls, env: str | None = None):
+        config = HiveRuntimeConfig.get_env_config(env)
+        if not config:
+            raise ValueError(f"Hive environment config not found: {env}")
+
+        mode = HiveConnectionManager.normalize_mode(config.get("mode"))
+        if not HiveConnectionManager.is_local_mode(mode):
+            raise ValueError(
+                f"Environment '{env}' is mode='{mode}', not local process mode."
             )
-        )
-        python_path = Path(
-            os.environ.get(
-                "LOCAL_HIVE_PYTHON",
-                config.get("python", str(root / ".venv" / "Scripts" / "python.exe")),
+
+        missing = [
+            field for field in ("root", "python", "runner") if not config.get(field)
+        ]
+        if missing:
+            raise ValueError(
+                f"Local Hive environment is missing required fields: {', '.join(missing)}"
             )
-        )
-        runner_path = Path(
-            os.environ.get(
-                "LOCAL_HIVE_RUNNER",
-                config.get("runner", str(root / "run_hive_sql.py")),
-            )
-        )
+
+        root = Path(str(config["root"]))
+        python_path = Path(str(config["python"]))
+        runner_path = Path(str(config["runner"]))
         return root, python_path, runner_path
 
     @classmethod
@@ -94,8 +103,8 @@ class LocalHiveProcessExecutor:
         )
 
     @classmethod
-    def _run(cls, schema: str, sql: str) -> dict:
-        root, python_path, runner_path = cls._config()
+    def _run(cls, schema: str, sql: str, env: str | None = None) -> dict:
+        root, python_path, runner_path = cls._config(env)
         if not root.exists():
             raise FileNotFoundError(
                 f"Local Hive root not found: {root}. Run the local setup first."
@@ -182,8 +191,8 @@ class LocalHiveProcessExecutor:
         return f"{header}\n" + "\n".join(rendered_rows)
 
     @classmethod
-    def execute_query(cls, schema: str, sql: str) -> str:
-        payload = cls._run(schema, sql)
+    def execute_query(cls, schema: str, sql: str, env: str | None = None) -> str:
+        payload = cls._run(schema, sql, env)
         results = payload.get("results", [])
         if not results:
             return ""
@@ -191,17 +200,17 @@ class LocalHiveProcessExecutor:
         return cls._format_result(result.get("columns", []), result.get("rows", []))
 
     @classmethod
-    def execute(cls, schema: str, sql: str) -> None:
-        cls._run(schema, sql)
+    def execute(cls, schema: str, sql: str, env: str | None = None) -> None:
+        cls._run(schema, sql, env)
 
     @classmethod
-    def execute_batch(cls, schema: str, sql_list) -> bool:
+    def execute_batch(cls, schema: str, sql_list, env: str | None = None) -> bool:
         sql_text = ";\n".join(
             item.strip().rstrip(";") for item in sql_list if item.strip()
         )
         if not sql_text:
             return True
-        cls._run(schema, sql_text)
+        cls._run(schema, sql_text, env)
         return True
 
     @staticmethod
@@ -210,20 +219,38 @@ class LocalHiveProcessExecutor:
 
 
 class HiveConnectionManager:
-    LOCAL_ENV = "local"
-    REMOTE_LIKE_MODES = {"remote", "local_hs2"}
+    LOCAL_MODE = "local"
+    REMOTE_EXACT_MODES = {"remote", "local_hs2"}
+    REMOTE_MODE_PREFIXES = ("local_hs2_",)
     _lock = threading.Lock()
     _connections = OrderedDict()
 
     @classmethod
     def normalize_env(cls, env: str | None = None) -> str:
         normalized_env = str(env or HiveRuntimeConfig.active_env()).strip().lower()
-        return normalized_env or HiveRuntimeConfig.DEFAULT_ACTIVE_ENV
+        if not normalized_env:
+            raise ValueError("Active Hive environment is empty. Check conf/aml_conf.conf")
+        return normalized_env
+
+    @classmethod
+    def normalize_mode(cls, mode: str | None) -> str:
+        return str(mode or "").strip().lower()
+
+    @classmethod
+    def is_local_mode(cls, mode: str | None) -> bool:
+        return cls.normalize_mode(mode) == cls.LOCAL_MODE
+
+    @classmethod
+    def is_remote_like_mode(cls, mode: str | None) -> bool:
+        normalized = cls.normalize_mode(mode)
+        if normalized in cls.REMOTE_EXACT_MODES:
+            return True
+        return normalized.startswith(cls.REMOTE_MODE_PREFIXES)
 
     @classmethod
     def is_local_env(cls, env: str | None = None) -> bool:
         config = HiveRuntimeConfig.get_env_config(env)
-        return str(config.get("mode", "")).strip().lower() == cls.LOCAL_ENV
+        return cls.is_local_mode(config.get("mode"))
 
     @classmethod
     def supported_envs(cls):
@@ -239,11 +266,13 @@ class HiveConnectionManager:
                 f"Invalid environment: {normalized_env}. Supported environments: {supported}"
             )
 
-        mode = str(config.get("mode", "")).strip().lower()
-        if mode == cls.LOCAL_ENV:
+        mode = cls.normalize_mode(config.get("mode"))
+        if cls.is_local_mode(mode):
             raise ValueError("Local mode does not use a remote Hive connection.")
-        if mode not in cls.REMOTE_LIKE_MODES:
-            supported_modes = ", ".join(sorted(cls.REMOTE_LIKE_MODES | {cls.LOCAL_ENV}))
+        if not cls.is_remote_like_mode(mode):
+            supported_modes = ", ".join(
+                sorted(cls.REMOTE_EXACT_MODES | {cls.LOCAL_MODE})
+            )
             raise ValueError(
                 f"Environment {normalized_env} has unsupported mode '{mode}'. "
                 f"Supported modes: {supported_modes}."
@@ -255,27 +284,80 @@ class HiveConnectionManager:
                 "Install it or use env='local' for local debugging."
             )
 
+        missing = [
+            field for field in ("host", "port", "username") if not config.get(field)
+        ]
+        if missing:
+            raise ValueError(
+                f"Environment {normalized_env} is missing required fields: "
+                f"{', '.join(missing)}"
+            )
+
+        try:
+            port = int(config["port"])
+        except Exception as exc:
+            raise ValueError(
+                f"Invalid port for environment {normalized_env}: {config.get('port')}"
+            ) from exc
+
         connection_key = f"{normalized_env}:{schema}"
         with cls._lock:
             if connection_key in cls._connections:
                 return cls._connections[connection_key]
 
-            auth = "LDAP" if config.get("password") else None
-            try:
-                conn = hive.connect(
-                    host=config["host"],
-                    port=config.get("port", 10000),
-                    auth=auth,
-                    username=config["username"],
-                    password=config.get("password"),
-                    database=schema,
-                    configuration=HiveRuntimeConfig.hive_conf(),
-                )
-            except Exception as exc:
-                raise ConnectionError(f"Hive connection failed: {exc}") from exc
+            auth = config.get("auth") or ("LDAP" if config.get("password") else "PLAIN")
 
-            cls._connections[connection_key] = conn
-            return conn
+            # Try impyla first (better Windows support)
+            conn = None
+            last_error = None
+
+            if IMPALA_AVAILABLE:
+                try:
+                    # Map auth mechanisms to impyla format
+                    impala_auth = "PLAIN"
+                    if auth == "LDAP":
+                        impala_auth = "LDAP"
+                    elif auth in ("NONE", "NOSASL"):
+                        impala_auth = "NOSASL"
+
+                    conn_kwargs = {
+                        "host": config["host"],
+                        "port": port,
+                        "database": schema,
+                        "auth_mechanism": impala_auth,
+                    }
+                    # Add password only for LDAP
+                    if impala_auth == "LDAP" and config.get("password"):
+                        conn_kwargs["password"] = config["password"]
+                    else:
+                        conn_kwargs["user"] = config["username"]
+
+                    conn = impala_connect(**conn_kwargs)
+                    cls._connections[connection_key] = conn
+                    return conn
+                except Exception as exc:
+                    last_error = exc
+
+            # Fallback to pyhive
+            if conn is None and hive is not None:
+                try:
+                    conn = hive.connect(
+                        host=config["host"],
+                        port=port,
+                        auth=auth,
+                        username=config["username"],
+                        password=config.get("password"),
+                        database=schema,
+                        configuration=HiveRuntimeConfig.hive_conf(),
+                    )
+                    cls._connections[connection_key] = conn
+                    return conn
+                except Exception as exc:
+                    last_error = exc
+
+            if last_error:
+                raise ConnectionError(f"Hive connection failed: {last_error}") from last_error
+            raise ConnectionError("No Hive driver available (impyla/pyhive not installed)")
 
     @classmethod
     def close_all_connections(cls):
@@ -293,7 +375,7 @@ class JdbcHiveUtils:
     def execute_query(schema, sql, env: str | None = None):
         normalized_env = HiveConnectionManager.normalize_env(env)
         if HiveConnectionManager.is_local_env(normalized_env):
-            return LocalHiveProcessExecutor.execute_query(schema, sql)
+            return LocalHiveProcessExecutor.execute_query(schema, sql, normalized_env)
 
         conn = HiveConnectionManager.get_connection(normalized_env, schema)
         with contextlib.closing(conn.cursor()) as cursor:
@@ -317,7 +399,7 @@ class JdbcHiveUtils:
     def execute(schema, sql, env: str | None = None):
         normalized_env = HiveConnectionManager.normalize_env(env)
         if HiveConnectionManager.is_local_env(normalized_env):
-            LocalHiveProcessExecutor.execute(schema, sql)
+            LocalHiveProcessExecutor.execute(schema, sql, normalized_env)
             return
 
         conn = HiveConnectionManager.get_connection(normalized_env, schema)
@@ -332,7 +414,9 @@ class JdbcHiveUtils:
     def execute_batch(cls, schema, sql_list, env: str | None = None):
         normalized_env = HiveConnectionManager.normalize_env(env)
         if HiveConnectionManager.is_local_env(normalized_env):
-            return LocalHiveProcessExecutor.execute_batch(schema, sql_list)
+            return LocalHiveProcessExecutor.execute_batch(
+                schema, sql_list, normalized_env
+            )
 
         for index, sql in enumerate(sql_list, 1):
             print(f"Executing statement #{index}: {sql[:100]}...")
@@ -346,40 +430,14 @@ class JdbcHiveUtils:
 
 
 class HiveRuntimeConfig:
-    DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "conf" / "hive_envs.json"
-    DEFAULT_AML_CONF_PATH = Path(__file__).resolve().parent.parent / "conf" / "aml_conf.conf"
-    DEFAULT_ACTIVE_ENV = "local"
+    DEFAULT_CONFIG_PATH = (
+        Path(__file__).resolve().parent.parent / "conf" / "hive_envs.json"
+    )
+    DEFAULT_AML_CONF_PATH = (
+        Path(__file__).resolve().parent.parent / "conf" / "aml_conf.conf"
+    )
     ACTIVE_ENV_SECTION = "hive"
     ACTIVE_ENV_OPTION = "active_env"
-    DEFAULT_CONFIG = {
-        "hive_conf": {
-            "mapreduce.job.queuename": "queue_1006_01",
-            "hive.exec.mode.local.auto": "true",
-            "hive.exec.mode.local.auto.inputbytes.max": "100000000",
-            "hive.exec.mode.local.auto.input.files.max": "50",
-        },
-        "environments": {
-            "local": {
-                "mode": "local",
-                "root": r"D:\workspace\hive-local-test",
-                "python": r"D:\workspace\hive-local-test\.venv\Scripts\python.exe",
-                "runner": r"D:\workspace\hive-local-test\run_hive_sql.py",
-            },
-            "local_hs2": {
-                "mode": "local_hs2",
-                "host": "127.0.0.1",
-                "port": 10000,
-                "username": "xiongyuc",
-            },
-            "uat": {
-                "mode": "remote",
-                "host": "172.21.1.168",
-                "port": 10000,
-                "username": "hduser1009",
-                "password": "Hduser1009@1234.#",
-            },
-        },
-    }
 
     @classmethod
     def config_path(cls) -> Path:
@@ -390,7 +448,10 @@ class HiveRuntimeConfig:
     def load(cls) -> dict:
         path = cls.config_path()
         if not path.exists():
-            return cls.DEFAULT_CONFIG
+            raise FileNotFoundError(
+                f"Hive config file not found: {path}. "
+                "Please configure conf/hive_envs.json."
+            )
         with path.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
         if not isinstance(payload, dict):
@@ -403,6 +464,10 @@ class HiveRuntimeConfig:
         environments = payload.get("environments", {})
         if not isinstance(environments, dict):
             raise ValueError(f"Invalid Hive environments config: {cls.config_path()}")
+        if not environments:
+            raise ValueError(
+                f"Hive environments is empty in config file: {cls.config_path()}"
+            )
         return environments
 
     @classmethod
@@ -415,17 +480,32 @@ class HiveRuntimeConfig:
             os.environ.get("AML_CONF_PATH", str(cls.DEFAULT_AML_CONF_PATH))
         )
         parser = configparser.ConfigParser()
-        if conf_path.exists():
-            parser.read(conf_path, encoding="utf-8")
-            selected = parser.get(
-                cls.ACTIVE_ENV_SECTION,
-                cls.ACTIVE_ENV_OPTION,
-                fallback="",
-            ).strip().lower()
-            if selected:
-                return selected
+        if not conf_path.exists():
+            raise FileNotFoundError(
+                f"AML config file not found: {conf_path}. "
+                "Please configure conf/aml_conf.conf."
+            )
 
-        return cls.DEFAULT_ACTIVE_ENV
+        parser.read(conf_path, encoding="utf-8")
+        selected = parser.get(
+            cls.ACTIVE_ENV_SECTION,
+            cls.ACTIVE_ENV_OPTION,
+            fallback="",
+        ).strip().lower()
+        if not selected:
+            raise ValueError(
+                "Missing [hive].active_env in conf/aml_conf.conf. "
+                "Please configure an environment name."
+            )
+
+        envs = cls.environments()
+        if selected not in envs:
+            supported = ", ".join(sorted(envs.keys()))
+            raise ValueError(
+                f"Configured active_env '{selected}' not found in hive_envs.json. "
+                f"Supported environments: {supported}"
+            )
+        return selected
 
     @classmethod
     def get_env_config(cls, env: str | None) -> dict:

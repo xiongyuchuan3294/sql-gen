@@ -1,0 +1,10 @@
+name: alter_table
+params:
+  operations:
+  - action: add_columns
+    columns:
+    - comment: new column
+      name: new_col
+      type: string
+  table_name: imd_aml_safe.t_local_hs2_aml_safe_demo
+type: alter_table

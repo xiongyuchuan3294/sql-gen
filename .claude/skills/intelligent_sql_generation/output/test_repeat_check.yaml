@@ -1,0 +1,8 @@
+type: "repeat_check"
+description: "Check for duplicate keys"
+params:
+  table_name: "imd_aml_safe.t_local_hs2_aml_safe_demo"
+  partition: "ds='2026-02-01'"
+  group_by_columns:
+    - "id"
+  having_threshold: 1

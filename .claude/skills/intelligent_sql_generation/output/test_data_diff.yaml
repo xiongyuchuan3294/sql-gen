@@ -1,0 +1,12 @@
+type: "data_diff"
+description: "Compare two tables for differences"
+params:
+  source_table: "imd_aml_safe.t_local_hs2_aml_safe_demo"
+  target_table: "imd_amlai_ads_safe.t_local_hs2_amlai_ads_safe_demo"
+  source_partition: "ds='2026-02-01'"
+  target_partition: "ds='2026-02-01'"
+  join_keys:
+    - "id"
+  compare_columns:
+    - "id"
+    - "name"
