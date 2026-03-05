@@ -1,0 +1,6 @@
+type: move_partition
+params:
+  table: t_test_partition
+  db: imd_aml_safe
+  source_partition: ds='2026-02-01'
+  target_partition: ds='2026-02-01-temp'

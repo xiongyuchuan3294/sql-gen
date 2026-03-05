@@ -1,8 +1,0 @@
-type: "field_dist"
-description: "Distribution of values for specific columns"
-params:
-  table_name: "imd_aml_safe.t_local_hs2_aml_safe_demo"
-  partition: "ds='2026-02-01'"
-  columns:
-    - "name"
-  limit: 20

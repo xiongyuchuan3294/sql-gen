@@ -1,5 +1,0 @@
-params:
-  targets:
-  - db: imd_aml_safe
-    table: t_local_hs2_aml_safe_demo
-type: hdfs_du

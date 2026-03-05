@@ -1,0 +1,9 @@
+type: "data_diff"
+description: "新旧对账：t_test_partition 2026-02-01 分区对比"
+params:
+  source_table: "t_test_partition"
+  target_table: "t_test_partition"
+  source_partition: "ds='2026-02-01'"
+  target_partition: "ds='2026-01-31'"
+  join_keys:
+    - "id"

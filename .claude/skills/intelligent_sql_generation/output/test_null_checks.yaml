@@ -1,8 +1,0 @@
-name: null_checks
-params:
-  columns:
-  - id
-  - name
-  partition: ds='2026-02-01'
-  table_name: imd_aml_safe.t_local_hs2_aml_safe_demo
-type: null_checks

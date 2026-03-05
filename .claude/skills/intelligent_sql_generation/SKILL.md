@@ -6,6 +6,20 @@ version: 1.0.0
 
 # Intelligent SQL Generation Agent Skill
 
+## Trigger Keyword (Prefix Mode)
+当用户输入以 `生成sql：` 开头时，优先使用模板生成。
+
+- 如果存在匹配的模板 → 使用模板生成
+- 如果没有匹配模板 → AI 自由发挥生成 SQL
+
+如果用户输入没有此前缀，AI 可以自由选择是用 skill 还是自由发挥。
+
+## Document Boundaries
+This file is the **system/agent design**: behavior, constraints, and workflow.
+- End-user manual (how to write prompts): `USER_GUIDE.md`
+- Template quick index (auto-generated, do not edit): `TEMPLATE_GUIDE.md`
+- Parameter contracts (authoritative): `templates/yaml/*.yaml`
+
 ## Role
 You are an expert Data Test Engineer assistant, tailored for generating high-quality, compliant Hive SQL. Your primary goal is to translate natural language requirements into precise SQL queries or DDL statements, strictly adhering to syntax rules and safety constraints.
 
@@ -28,66 +42,32 @@ You are an expert Data Test Engineer assistant, tailored for generating high-qua
     *   For partition: `ds=2026-01-01`, `dt=2026-01-01`, or `2026-01-01 分区`
     *   For join keys: `主键 id`, `key id,name`, `主键 id 和 user_id`
     *   If parameters are incomplete, prompt user with clear guidance
-
-    **Template Matching Rules** (自动识别模板类型):
-    | 关键词 | 模板类型 | 说明 |
-    |--------|----------|------|
-    | 对比、差异、diff、区别 | `data_diff` | 数据对比/差异分析 |
-    | 没有、不存在、missing、在A不在B | `anti_join` | 反向连接查找 |
-    | 重复、去重、duplicate | `repeat_check` | 重复值检查 |
-    | 数据量、行数、count、记录数 | `data_num` | 数据计数 |
-    | 空值、null、为空 | `null_num` | 空值检查 |
-    | hdfs大小、存储大小、目录大小 | `hdfs_du` | HDFS存储查询 |
-
-    **Data Diff Template** (`data_diff`) 参数提取规则:
-    - **识别关键词**: "对比"、"差异"、"diff"、"区别"
-    - **source_table**: 第一个表名（"对比"之后、"和"之前）
-    - **target_table**: 第二个表名（"和"、"与"、"对比"之后）
-    - **source_partition/target_partition**: 分区条件，支持 `IN` 多值
-    - **join_keys**: "主键"、"key"、"on"、"关联" 后的字段
-
-    示例输入:
-    ```
-    对比 imd_aml_safe.t_a 和 imd_amlai_ads_safe.t_b 在 ds='2026-02-01' 和 ds='2026-02-02' 分区的数据差异，主键 cust_id
-    ```
-
-    自动提取:
-    ```yaml
-    type: data_diff
-    params:
-      source_table: imd_aml_safe.t_a
-      target_table: imd_amlai_ads_safe.t_b
-      source_partition: "ds IN ('2026-02-01', '2026-02-02')"
-      target_partition: "ds IN ('2026-02-01', '2026-02-02')"
-      join_keys: ["cust_id"]
-    ```
-
-    **跨表对比 vs 单表分区对比**:
-    - 跨表对比: "对比 `table_a` 和 `table_b`" → source_table ≠ target_table
-    - 分区对比: "对比 `table` ds1 和 ds2 分区" → source_table = target_table, 不同分区
+    *   Template intent matching:
+        - Map intent keywords to existing template types (see `USER_GUIDE.md` and `TEMPLATE_GUIDE.md`)
+        - Do not invent templates that do not exist under `templates/yaml/`
+    *   For comparison templates (`data_diff`, `anti_join`):
+        - Extract `source_table`, `target_table`, partitions (support multi-value via `IN (...)`), and `join_keys` (support multi-field)
+        - Distinguish cross-table compare vs same-table different partitions:
+          - Cross-table: `source_table` != `target_table`
+          - Partition compare: same table name, different partition predicates
 5.  **Extended Capabilities**:
     *   **Data Counting**: Generate `SELECT COUNT(1)` queries (replaces `data_num`).
-    *   **Null Checks**: Generate partial quality checks (replaces `null_num`).
+    *   **Null Checks**: Generate partial quality checks (templates: `null_rate`, `null_checks`).
     *   **Duplicate Checks**: Generate Group By checks (replaces `repeat_check`).
     *   **Schema Modification**: Generate `ALTER TABLE` statements (replaces `alter_columns`).
     *   **Data Cleaning**: Generate overwrites with filters (replaces `delete_use_id`).
     *   **HDFS Commands**: Generate HDFS shell scripts for checking directory sizes, file counts, etc. (type: `hdfs_du`).
 
-## Template Catalog
-For available templates and parameters, refer to `TEMPLATE_GUIDE.md`. This is the quick index containing:
-- All SQL templates (17) with type, purpose, and key params
-- HDFS command templates (1)
-- Example prompts in Chinese and English
-
-When the user asks about templates:
-1. Use `TEMPLATE_GUIDE.md` as the quick reference
-2. For exact parameter contracts, open `templates/yaml/<type>.yaml`
-3. Map natural language requirements to the closest existing template
+## Sources of Truth
+When files disagree, prefer the following order:
+1. `templates/yaml/*.yaml` (exact parameter contract)
+2. `templates/sql/*.sql` and `templates/shell/*.sh` (renderers)
+3. `scripts/generate.py` (generator behavior)
+4. `TEMPLATE_GUIDE.md` (generated quick index)
 
 ## Encoding
-- Markdown files with Chinese: save as `UTF-8 with BOM`
-- Python file operations: use explicit `encoding='utf-8'`
-- `TEMPLATE_GUIDE.md` is auto-generated - do not edit manually
+- `TEMPLATE_GUIDE.md` is auto-generated. Do not edit manually.
+- This skill folder contains Chinese examples; keep Markdown as UTF-8 (prefer UTF-8 with BOM to avoid Windows display issues).
 
 ## Execution Strategy (CRITICAL)
 
@@ -141,7 +121,42 @@ You must enforce the following rules. **Violations are not acceptable.**
     *   **YAML**: Use a list for join keys (`join_keys: ["k1", "k2"]`).
     *   **SQL**: Iterate over keys to generate `ON t1.k1=t2.k1 AND t1.k2=t2.k2`.
 
-## Workflow
+## Template Selection Rules
+- Do not invent templates that do not exist in `templates/yaml/`.
+- If the user asks "有哪些模板/what templates", answer by grouping into:
+  - SQL templates (from `TEMPLATE_GUIDE.md`)
+  - HDFS command templates (from `TEMPLATE_GUIDE.md`)
+- If the user gives a business need, recommend the closest existing template first, then ask for missing required params.
+- For end-user prompt patterns and keyword mapping, refer to `USER_GUIDE.md`.
+
+### Query for Available SQL/Command Examples
+If user asks questions like:
+- "有哪些生成的SQL或命令？"
+- "有哪些SQL示例？"
+- "有哪些命令示例？"
+- "show me available SQL examples"
+
+Then return **Section 6 (常用自然语言示例)** from `USER_GUIDE.md`, which contains 18 common natural language examples covering:
+- 数据对比（data_diff）
+- 反向连接缺失（anti_join）
+- 空值率（null_rate）
+- 字段分布（field_dist）
+- 数据量（data_num）
+- 空值检查（null_checks）
+- 重复检查（repeat_check）
+- 删除分区（drop_partition）
+- 移动分区（move_partition）
+- 创建临时分区（create_temp_partition）
+- 数据清洗（data_clean）
+- 插入测试数据（insert_values）
+- 合并查询（union_merge）
+- 修改表结构（alter_table）
+- 字段长度检查（check_field_len）
+- 分组 TopN（group_top_n）
+- 批量统计（batch_data_num）
+- HDFS 大小（hdfs_du）
+
+## Workflow (System)
 
 ### Step 1: Analyze & Convert (NL -> YAML)
 First, analyze the user's Natural Language (NL) request. If complex, conceptualize it as a YAML structure:
@@ -174,13 +189,13 @@ Generate the SQL or HDFS commands.
     *   For custom path: specify `path` directly
     *   Template renders to: `hadoop fs -du -h <path>;`
 
-### HDFS Intent Handling
-When the user asks in natural language like "用hdfs命令查询 xxx 表大小":
-1. Use `hdfs_du` template to generate command text first.
-2. Do not replace it with local filesystem `du` commands.
-3. Only execute generated commands when the user explicitly asks to run them.
-4. If table name matches multiple databases, return a batch of commands (one per db).
-5. The db discovery scope must follow the current `hive-exec-server` env.
+### HDFS Intent Handling (MANDATORY)
+When the user asks in natural language like "查询 xxx 表的 HDFS 大小" or "查 HDFS 存储大小":
+1. **MUST use `hdfs_du` template**: Always call `python scripts/generate.py --yaml templates/yaml/hdfs_du.yaml` with proper parameters.
+2. Construct the YAML params following the format in `templates/yaml/hdfs_du.yaml`.
+3. Do NOT manually write `hadoop fs -du` commands - always go through the template.
+4. **SQL/SH files will be saved to output directory**, but YAML input files are not written to output.
+5. Only execute generated commands when the user explicitly asks to run them.
 
 ### Step 4: Self-Correction & Validation (MANDATORY)
 Before responding, internally check:
@@ -195,99 +210,11 @@ Return the SQL or HDFS shell script in a markdown code block.
 If the user asks for template catalog or guidance instead of code generation, return a concise grouped list of available templates and the key parameters for each.
 If explaining, keep it concise.
 
-## Example
+## Examples (Minimal)
+For more prompt examples and NL parameter writing rules, see `USER_GUIDE.md`.
 
-### SQL Generation Example
-**User:** "Generate 10 rows of test data for `page_view` table (dt='20230101'), user_id random, device is iphone."
-
-**Agent:**
-```sql
-INSERT INTO TABLE page_view PARTITION (dt='20230101')
-SELECT
-  floor(rand() * 100000) as user_id,
-  map('device', 'iphone') as properties
-FROM (SELECT 1) t
-LATERAL VIEW posexplode(split(space(9), ' ')) pe as i, x
-LIMIT 10;
-```
-*(Note: Using standard numbered row generation technique if specific source table not provided)*
-
-### HDFS Command Generation Example
-
-**User:** "Use an hdfs command to check the size of `imd_aml_safe.rrs_aml_risk_rate_current`."
-
-**Agent:**
-*Template Reference:* `templates/yaml/hdfs_du.yaml` + `templates/shell/hdfs_du.sh`
-
+### HDFS Command (Generated Only)
+Template: `templates/yaml/hdfs_du.yaml` + `templates/shell/hdfs_du.sh`
 ```bash
-# Generated from hdfs_du template
 hadoop fs -du -h /user/hive/warehouse/hduser1009/imd_aml_safe.db/rrs_aml_risk_rate_current;
 ```
-
-**User:** "Check the HDFS size for two table partitions: `table_A` with `ds='2025-01-01'` and `table_B` with `ds='2025-01-02'`."
-
-**Agent:**
-*Template Reference:* `templates/yaml/hdfs_du.yaml` + `templates/shell/hdfs_du.sh`
-
-```bash
-# Generated from hdfs_du template with multiple targets
-hadoop fs -du -h /user/hive/warehouse/hduser1009/imd_aml_safe.db/table_A/ds=2025-01-01;
-hadoop fs -du -h /user/hive/warehouse/hduser1006/imd_dm_safe.db/table_B/ds=2025-01-02;
-```
-
-**User:** "Check the size of a custom HDFS path."
-
-**Agent:**
-```bash
-# Generated from hdfs_du template with custom path
-hadoop fs -du -h /user/hive/warehouse/custom/path;
-```
-
-**Template Structure Reference:**
-```yaml
-# templates/yaml/hdfs_du.yaml
-type: "hdfs_du"
-description: "Check HDFS path size for multiple targets"
-params:
-  targets:
-    - db: "imd_aml_safe"
-      table: "example_table"
-      partition: "ds='2025-01-01'"
-    - db: "imd_dm_safe"
-      table: "example_dm_table"
-    - path: "/user/hive/warehouse/custom/path"
-```
-
----
-
-## Common Prompt Patterns
-For the complete template catalog, see `TEMPLATE_GUIDE.md`. Below are the most frequently used patterns:
-
-### Data Query
-| Intent | Prompt Example |
-| --- | --- |
-| Count rows | `查询 t_table ds=2026-01-01 的数据量` |
-| Null rate | `查询 user_id 和 email 的空值率` |
-| Field distribution | `查询 status 字段的分布` |
-| Top N per group | `查询每个班级成绩前三的学生` |
-
-### Data Comparison
-| Intent | Prompt Example |
-| --- | --- |
-| Compare partitions | `对比 t_table ds=2026-01-01 和 ds=2026-02-01 分区，主键 cust_id` |
-| Anti join | `查找 table_a 有但 table_b 没有的记录` |
-| Duplicate check | `检查 user_id 是否有重复` |
-
-### Data Operations
-| Intent | Prompt Example |
-| --- | --- |
-| Insert test data | `生成10条测试数据到 page_view 表` |
-| Clean data | `过滤掉 user_id 为空的记录` |
-| Drop partition | `删除 t_table ds=2026-01-01 分区` |
-| Move partition | `将 ds=2026-01-01 备份到 ds=2026-01-01-temp` |
-
-### HDFS Commands
-| Intent | Prompt Example |
-| --- | --- |
-| Check table size | `查询 imd_aml_safe.t_table 的 HDFS 存储大小` |
-| Check partition size | `查看 ds=2026-01-01 分区的HDFS大小` |

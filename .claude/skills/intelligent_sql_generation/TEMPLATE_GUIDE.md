@@ -55,24 +55,7 @@ python scripts/generate_template_guide.py
 | --- | --- | --- | --- |
 | `hdfs_du` | Check HDFS path size for multiple targets | `targets[].db`, `targets[].table`, `targets[].dbs[]`, `targets[].path` | `templates/shell/hdfs_du.sh` |
 
-## Chinese Prompt Examples
-- 目前有哪些可用的 SQL 模板？
-- 目前有哪些可用的 HDFS 命令模板？
-- `data_diff` 模板需要哪些参数？
-- 帮我判断“查 source 和 target 差异”该用哪个模板。
-- 用 `null_rate` 模板生成 `foo.bar` 在 `ds='2025-01-01'` 分区的空值率 SQL。
-- 用 `hdfs_du` 模板检查 `imd_aml_safe.table_a` 的 `ds='2025-01-01'` 分区大小。
-
-## English Prompt Examples
-- What SQL templates are available right now?
-- What HDFS command templates are available right now?
-- What parameters does the `data_diff` template require?
-- Use the `data_diff` template to generate SQL for `foo.bar` on `ds='2025-01-01'`.
-- Use the `hdfs_du` template to check `imd_aml_safe.table_a` for `ds='2025-01-01'`.
-
-## Local Generation Examples
+## Local Generation
 ```bash
-python scripts/generate_template_guide.py
 python scripts/generate.py --yaml templates/yaml/data_diff.yaml
-python scripts/generate.py --yaml templates/yaml/hdfs_du.yaml
 ```

@@ -1,0 +1,8 @@
+type: data_diff
+params:
+  source_table: imd_aml_safe.t_test_partition
+  target_table: imd_aml_safe.t_test_partition
+  source_partition: ds='2026-02-01'
+  target_partition: ds='2026-02-01-temp'
+  join_keys:
+    - id

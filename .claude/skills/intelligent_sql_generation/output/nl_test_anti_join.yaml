@@ -1,8 +1,0 @@
-params:
-  join_keys:
-  - cust_id
-  source_partition: ds='2026-02-01'
-  source_table: imd_amlai_ads_safe.t_local_hs2_amlai_ads_safe_p_ds
-  target_partition: ds='2026-02-01'
-  target_table: imd_aml_safe.t_local_hs2_aml_safe_p_ds
-type: anti_join

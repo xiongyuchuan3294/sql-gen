@@ -1,7 +1,0 @@
-name: check_field_len
-params:
-  column: name
-  limit: 5
-  partition: ds='2026-02-01'
-  table_name: imd_aml_safe.t_local_hs2_aml_safe_demo
-type: check_field_len

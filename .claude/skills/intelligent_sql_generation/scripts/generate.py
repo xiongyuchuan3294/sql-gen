@@ -26,8 +26,19 @@ HDFS_WAREHOUSE_USER_BY_DB = {
 
 
 def find_repo_root():
-    """Find the root of the sql-gen repository."""
-    return os.path.abspath(os.path.join(find_project_root(), "..", ".."))
+    """Find the root of the sql-gen repository (where tools directory exists)."""
+    # 从脚本位置向上查找，找到包含 'tools' 目录的父目录
+    current_path = os.path.abspath(os.path.dirname(__file__))
+    while current_path:
+        parent = os.path.dirname(current_path)
+        tools_path = os.path.join(current_path, "tools")
+        if os.path.isdir(tools_path):
+            return current_path
+        if parent == current_path:  # Root reached
+            break
+        current_path = parent
+    # Fallback: 返回 find_project_root() 的父目录
+    return os.path.abspath(os.path.join(find_project_root(), ".."))
 
 
 def find_project_root():
@@ -112,6 +123,9 @@ def parse_first_column_rows(result_text):
     values = []
     for line in data_lines:
         first_col = line.split("\t")[0].strip()
+        # 去掉 beeline 返回的单引号（如 'aml_demo' -> aml_demo）
+        if first_col and first_col.startswith("'") and first_col.endswith("'"):
+            first_col = first_col[1:-1]
         if first_col:
             values.append(first_col)
     return values
@@ -123,8 +137,13 @@ def load_hive_runtime():
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
 
+    # Try external hive-mcp directory first
+    hive_mcp_path = os.path.expanduser("~/workspace/hive-mcp")
+    if os.path.isdir(hive_mcp_path) and hive_mcp_path not in sys.path:
+        sys.path.insert(0, hive_mcp_path)
+
     try:
-        from tools.hive_client import HiveRuntimeConfig, JdbcHiveUtils
+        from hive_client import HiveRuntimeConfig, JdbcHiveUtils
     except Exception:
         return None, None
 
@@ -505,8 +524,8 @@ def get_non_partition_columns(db_name: str, table_name: str, env=None) -> list[s
         # 解析字段（排除分区字段）
         columns = []
         for line in result.split('\n'):
-            line = line.strip()
-            if not line:
+            # 不要 strip 整行，否则 \tNULL\tNULL 会变成 NULL\tNULL
+            if not line or line.isspace():
                 continue
             # 跳过空行和分隔行
             if '#' in line or 'col_name' in line.lower():
@@ -647,6 +666,20 @@ def build_hdfs_target_path(target):
 
 
 def prepare_params(template_name, params, env=None):
+    prepared_params = dict(params or {})
+
+    # 处理 move_partition, data_num 等模板：自动合并 db.table 为 table_name
+    if template_name in ("move_partition", "data_num", "null_checks", "null_rate", "repeat_check", "field_dist", "check_field_len"):
+        db = prepared_params.get("db", "")
+        table = prepared_params.get("table", "")
+        table_name = prepared_params.get("table_name", "")
+
+        # 如果没有 table_name 但有 db 和 table，自动组合
+        if not table_name and db and table:
+            prepared_params["table_name"] = f"{db}.{table}"
+
+        return prepared_params
+
     # 处理 data_diff 模板：自动获取表的非分区字段
     if template_name == "data_diff":
         prepared_params = dict(params or {})
@@ -786,13 +819,14 @@ def main():
     print(content)
     print("-" * 55)
 
-    # Optional: Write to output file
-    output_dir = os.path.join(find_project_root(), 'output')
-    os.makedirs(output_dir, exist_ok=True)
-    output_file = os.path.join(output_dir, f"{template_name}_generated.{ext}")
-    with open(output_file, 'w', encoding='utf-8', newline='\n') as f:
-        f.write(content)
-    print(f"Saved to: {output_file}")
+    # Write SQL/SH to output directory (not YAML)
+    if ext in ("sql", "sh"):
+        output_dir = os.path.join(find_project_root(), 'output')
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, f"{template_name}_generated.{ext}")
+        with open(output_file, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(content)
+        print(f"Saved to: {output_file}")
 
 if __name__ == "__main__":
     main()

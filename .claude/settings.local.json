@@ -18,7 +18,8 @@
       "Bash(D:/workspace/sql-gen/.venv/Scripts/pip.exe install:*)",
       "Bash(D:/workspace/sql-gen/.venv/Scripts/python.exe -m pip:*)",
       "Bash(D:/workspace/sql-gen/.venv/Scripts/python.exe -c:*)",
-      "Bash(.venv/Scripts/python.exe:*)"
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(/Users/xiongyuc/workspace/run_hive.sh status)"
     ]
   },
   "skills": [
