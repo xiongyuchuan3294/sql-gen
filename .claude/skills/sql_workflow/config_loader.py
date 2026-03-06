@@ -1,451 +1,797 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Scenario configuration loader and executor.
-支持两种参数格式：
-- 完整格式：db.table + partition='2026-01-01',hour='23'
-- 简单格式：table + ds=2026-01-01（自动格式化）
+"""YAML-driven SQL workflow executor.
+
+Design goal:
+1. AI is responsible for semantic parsing (NL -> workflow YAML input).
+2. Python is responsible for deterministic workflow SQL generation.
+3. Reuse intelligent_sql_generation/scripts/generate.py functions directly.
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-# Add scripts path for imports
-repo_root = Path(__file__).parent.parent.parent
-scripts_path = repo_root / "agent_skills" / "sql_generation" / "scripts"
-if str(scripts_path) not in sys.path:
-    sys.path.insert(0, str(scripts_path))
+
+CURRENT_DIR = Path(__file__).resolve().parent
+SCENARIO_CONFIG_DIR = CURRENT_DIR / "config" / "scenarios"
+OUTPUT_DIR = CURRENT_DIR / "output"
+INTELLIGENT_SQL_SCRIPT_DIR = CURRENT_DIR.parent / "intelligent_sql_generation" / "scripts"
+DB_NAME_HINTS = (
+    "imd_aml300_ads_safe",
+    "imd_amlai_ads_safe",
+    "imd_aml_dm_safe",
+    "imd_aml_safe",
+    "imd_rdfs_dm_safe",
+    "imd_dm_safe",
+)
+
+if str(INTELLIGENT_SQL_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(INTELLIGENT_SQL_SCRIPT_DIR))
+
+from generate import (  # noqa: E402
+    discover_db_names_by_table,
+    extract_partition_from_text,
+    prepare_data_diff_params,
+    prepare_params,
+    render_template,
+    validate_join_keys,
+    validate_partition_from_metadata,
+)
 
 
+@dataclass
 class ScenarioConfig:
-    """Scenario configuration loaded from YAML."""
+    """Scenario definition loaded from config/scenarios/*.yaml."""
 
-    def __init__(self, config: dict):
-        self.name = config.get("scenario", {}).get("name", "")
-        self.description = config.get("scenario", {}).get("description", "")
-        self.keywords = config.get("scenario", {}).get("keywords", [])
-        self.params_def = config.get("params", {})
-        self.steps = config.get("steps", [])
-
-    @classmethod
-    def load_from_file(cls, path: Path) -> "ScenarioConfig":
-        with open(path, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-        return cls(config)
+    name: str
+    description: str
+    keywords: list[str] = field(default_factory=list)
+    required_params: list[str] = field(default_factory=list)
+    defaults: dict[str, Any] = field(default_factory=dict)
+    steps: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
-    def load_all(cls, config_dir: Path) -> dict[str, "ScenarioConfig"]:
-        scenarios = {}
-        for yaml_file in config_dir.glob("*.yaml"):
-            config = cls.load_from_file(yaml_file)
-            scenarios[config.name] = config
-        return scenarios
+    def from_yaml(cls, payload: dict[str, Any]) -> "ScenarioConfig":
+        scenario_block = payload.get("scenario", {})
+        return cls(
+            name=str(scenario_block.get("name", "")).strip(),
+            description=str(scenario_block.get("description", "")).strip(),
+            keywords=list(scenario_block.get("keywords", []) or []),
+            required_params=list(payload.get("required_params", []) or []),
+            defaults=dict(payload.get("defaults", {}) or {}),
+            steps=list(payload.get("steps", []) or []),
+        )
 
 
-class ScenarioExecutor:
-    """Execute scenario based on configuration."""
+class WorkflowEngine:
+    """Deterministic workflow SQL generator."""
 
     def __init__(self, env: str | None = None):
         self.env = env
-        self.scenarios: dict[str, ScenarioConfig] = {}
-        self._load_scenarios()
+        self.scenarios = self._load_scenarios()
 
-    def _load_scenarios(self):
-        config_dir = Path(__file__).parent / "config" / "scenarios"
-        if config_dir.exists():
-            self.scenarios = ScenarioConfig.load_all(config_dir)
+    def _load_scenarios(self) -> dict[str, ScenarioConfig]:
+        scenarios: dict[str, ScenarioConfig] = {}
+        if not SCENARIO_CONFIG_DIR.exists():
+            return scenarios
 
-    def recognize(self, user_input: str) -> str | None:
-        """从用户输入识别场景类型"""
-        user_input_lower = user_input.lower()
-        for name, config in self.scenarios.items():
-            if any(kw.lower() in user_input_lower for kw in config.keywords):
-                return name
+        for yaml_file in sorted(SCENARIO_CONFIG_DIR.glob("*.yaml")):
+            payload = yaml.safe_load(yaml_file.read_text(encoding="utf-8-sig")) or {}
+            if not isinstance(payload, dict):
+                continue
+            scenario = ScenarioConfig.from_yaml(payload)
+            if scenario.name:
+                scenarios[scenario.name] = scenario
+        return scenarios
+
+    def recognize_scenario(self, user_input: str) -> str | None:
+        text = (user_input or "").lower()
+        for scenario in self.scenarios.values():
+            if any(str(keyword).lower() in text for keyword in scenario.keywords):
+                return scenario.name
         return None
 
-    def _normalize_partition(self, raw_partition: str) -> str:
-        """格式化分区值：ds=2026-02-01 -> ds='2026-02-01'"""
-        if not raw_partition:
-            return ""
+    def extract_params_from_text(self, user_input: str) -> dict[str, Any]:
+        """Fallback parser for backward compatibility.
 
-        parts = []
-        for part in raw_partition.split(","):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                v = v.strip().strip("'\"")
-                parts.append(f"{k}='{v}'")
-            else:
-                parts.append(part)
-        return ",".join(parts)
-
-    def _build_partition_where(self, partition: str) -> str:
-        """构建 WHERE 子句：ds='2026-02-01',hour='23' -> ds='2026-02-01' AND hour='23'"""
-        if not partition:
-            return ""
-        return " AND ".join(partition.split(","))
-
-    def _build_target_partition(self, partition: str, temp_suffix: str) -> str:
-        """构建目标分区：在每个分区值后添加 temp_suffix"""
-        if not partition:
-            return ""
-
-        parts = []
-        for part in partition.split(","):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                v = v.strip().strip("'\"")
-                parts.append(f"{k}='{v}{temp_suffix}'")
-            else:
-                parts.append(part)
-        return ",".join(parts)
-
-    def _enrich_params(self, params: dict) -> dict:
-        """自动丰富参数：
-        1. 格式化分区值
-        2. 构建 target_partition
-        3. 构建 partition_where
-        4. 构建 target_partition_where
-        5. 构建 join_keys
+        Preferred mode is still semantic YAML input.
         """
-        result = dict(params)
+        params: dict[str, Any] = {}
+        text = user_input or ""
 
-        # 1. 格式化分区值
-        raw_partition = params.get("raw_partition", "")
+        db, table_name = self._extract_table_from_text(text)
+        if db:
+            params["db"] = db
+        if table_name:
+            params["table_name"] = table_name
+
+        raw_partition = self._extract_raw_partition_from_text(text)
         if raw_partition:
-            result["partition"] = self._normalize_partition(raw_partition)
-        else:
-            result["partition"] = ""
+            params["partition"] = raw_partition
 
-        # 2. temp_suffix 默认值
-        result.setdefault("temp_suffix", "-temp")
-
-        # 3. 构建 target_partition
-        if result["partition"]:
-            result["target_partition"] = self._build_target_partition(
-                result["partition"], result["temp_suffix"]
-            )
-        else:
-            result["target_partition"] = ""
-
-        # 4. 构建 partition_where
-        result["partition_where"] = self._build_partition_where(result["partition"])
-
-        # 5. 构建 target_partition_where
-        result["target_partition_where"] = self._build_partition_where(
-            result["target_partition"]
-        )
-
-        # 6. 自动构建完整表名
-        db = result.get("db", "")
-        table_name = result.get("table_name", "")
-        if db and table_name:
-            result["table_name_full"] = f"{db}.{table_name}"
-        else:
-            result["table_name_full"] = table_name
-
-        # 7. join_keys 转换为列表
-        join_keys = params.get("join_keys", [])
-        if isinstance(join_keys, str):
-            result["join_keys"] = [k.strip() for k in join_keys.split(",") if k.strip()]
-        elif isinstance(join_keys, list):
-            result["join_keys"] = join_keys
-        else:
-            result["join_keys"] = []
-
-        return result
-
-    def extract_params(self, user_input: str) -> dict[str, Any]:
-        """
-        从用户输入提取参数
-        注意：复杂的参数理解由 AI (SKILL.md) 自动处理，这里只做基础提取
-        """
-        from generate import extract_partition_from_text
-
-        params = {}
-
-        # 保存原始输入（供 AI 分析）
-        params["_user_input"] = user_input
-
-        # 提取 db.table 格式
-        table_pattern = r"([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]+)"
-        match = re.search(table_pattern, user_input)
-        if match:
-            params["db"] = match.group(1)
-            params["table_name"] = match.group(2)
-        else:
-            # 只提取表名
-            simple_pattern = r"([a-zA-Z_][a-zA-Z0-9_]+)"
-            match = re.search(simple_pattern, user_input)
-            if match:
-                params["table_name"] = match.group(1)
-
-        # 调用 intelligent_sql_generation 提取分区
-        partition_result = extract_partition_from_text(user_input)
-        if "raw_partition" in partition_result:
-            params["raw_partition"] = partition_result["raw_partition"]
-
-        # 基础主键提取（后备）- 主要由 AI (SKILL.md) 自动理解
-        # 支持格式："主键 id", "key id", "主键 id 和 name", "主键 id 和case_date", "key id and user_id"
-        # 1. 先提取 "主键" 后面的所有内容
-        key_section_pattern = r"(?:key|主键)\s+(.+?)(?:\s+(?:分区|数据)|$)"
-        key_section_match = re.search(key_section_pattern, user_input, re.IGNORECASE)
-        if key_section_match:
-            keys_str = key_section_match.group(1).strip()
-            # 2. 统一处理 "和" / "and" 分隔（支持有/无空格）
-            keys_str = re.sub(r"\s*和\s*", ",", keys_str)  # "和" 前后有空格
-            keys_str = re.sub(r"(\w)和", r"\1,", keys_str)  # "cust_id和" -> "cust_id,"
-            keys_str = re.sub(r"和(\w)", r",\1", keys_str)  # "和case_date" -> ",case_date"
-            keys_str = re.sub(r"\s+and\s+", ",", keys_str)  # " and " -> ","
-            keys_str = re.sub(r"(\w)and", r"\1,", keys_str)  # "id and" -> "id,"
-            keys_str = re.sub(r"and(\w)", r",\1", keys_str)  # "and user_id" -> ",user_id"
-            params["join_keys"] = [k.strip() for k in keys_str.split(",") if k.strip() and k.strip().lower() not in ['和', 'and']]
+        join_keys = self._extract_join_keys_from_text(text)
+        if join_keys:
+            params["join_keys"] = join_keys
 
         return params
 
-    def substitute_params(self, text: str, params: dict) -> str:
-        """替换 {{param}} 占位符"""
-        if not text:
-            return text
-        result = text
-        for key, value in params.items():
-            placeholder = f"{{{{{key}}}}}"
-            if placeholder in result:
-                result = result.replace(placeholder, str(value))
-        return result
+    @staticmethod
+    def _extract_table_from_text(user_input: str) -> tuple[str, str]:
+        text = user_input or ""
 
-    def validate_params(self, params: dict, param_defs: dict) -> tuple[bool, str]:
-        """验证必填参数 - 调用 intelligent_sql_generation 的校验逻辑"""
-        from generate import (
-            validate_join_keys,
-            extract_partition_from_text,
-            validate_partition_from_metadata,
+        full_match = re.search(r"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\b", text)
+        if full_match:
+            return full_match.group(1), full_match.group(2)
+
+        token_pattern = r"\b([A-Za-z_][A-Za-z0-9_]*)\b"
+        raw_tokens = re.findall(token_pattern, text)
+        reserved = {
+            "and",
+            "compare",
+            "data",
+            "diff",
+            "for",
+            "from",
+            "in",
+            "join",
+            "key",
+            "keys",
+            "partition",
+            "pk",
+            "reconcile",
+            "scenario",
+            "sql",
+            "table",
+            "workflow",
+        }
+        for token in raw_tokens:
+            lowered = token.lower()
+            if lowered in reserved:
+                continue
+            if lowered in {"ds", "dt", "pt"}:
+                continue
+            if "_" not in token and not lowered.startswith("t"):
+                continue
+            if re.fullmatch(r"\d+", token):
+                continue
+            return "", token
+        return "", ""
+
+    @staticmethod
+    def _extract_raw_partition_from_text(user_input: str) -> str:
+        text = user_input or ""
+
+        raw_partition = ""
+        try:
+            parsed = extract_partition_from_text(text) or {}
+            raw_partition = str(parsed.get("raw_partition") or "").strip()
+        except Exception:
+            raw_partition = ""
+        if raw_partition:
+            return raw_partition
+
+        kv_matches = re.findall(
+            r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*['\"]?([A-Za-z0-9_:/.-]+)['\"]?",
+            text,
         )
+        partition_parts: list[str] = []
+        for field, value in kv_matches:
+            if field.lower() in {"key", "pk"}:
+                continue
+            partition_parts.append(f"{field}={value}")
+        if partition_parts:
+            return ",".join(partition_parts)
 
-        # 1. 提取并校验分区参数（调用 MCP 发现元数据）
-        user_input = params.get("_user_input", "")
-        if user_input and params.get("table_name"):
-            # 提取原始分区
-            raw_partition = params.get("raw_partition", "")
-            db_name = params.get("db", "")
-            table_name = params.get("table_name", "")
+        date_match = re.search(r"\b(\d{4}[-/]\d{2}[-/]\d{2})\b", text)
+        if date_match:
+            return f"ds={date_match.group(1).replace('/', '-')}"
 
-            if db_name and table_name:
-                # 调用元数据校验
-                result = validate_partition_from_metadata(
-                    db_name, table_name, raw_partition, self.env
-                )
-                if not result["valid"]:
-                    return False, result["message"]
+        return ""
 
-        # 2. 校验必填参数
-        for name, defn in param_defs.items():
-            if defn.get("required", False):
-                value = params.get(name)
-                if not value:
-                    return False, f"【参数缺失】请提供 {name}"
-                # 检查空列表
-                if isinstance(value, list) and len(value) == 0:
-                    # 对于 join_keys，使用更友好的提示
-                    if name == "join_keys":
-                        result = validate_join_keys([])
-                        return False, result["message"]
-                    return False, f"【参数缺失】请提供 {name}"
+    @staticmethod
+    def _extract_join_keys_from_text(user_input: str) -> list[str]:
+        match = re.search(
+            r"(?:主键|join\s*key|keys?|pk)\s*(?:是|为|[:：])?\s*(.+)$",
+            user_input,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return []
 
-        # 3. 校验 join_keys
-        if "join_keys" in params and isinstance(params.get("join_keys"), list):
-            result = validate_join_keys(params["join_keys"])
-            if not result["valid"]:
-                return False, result["message"]
+        raw = match.group(1)
+        for stop_word in ("分区", "partition", "workflow", "工作流", "场景", "scenario", "表"):
+            idx = raw.lower().find(stop_word.lower())
+            if idx >= 0:
+                raw = raw[:idx]
+                break
 
-        return True, ""
+        normalized = (
+            raw.replace("和", ",")
+            .replace("、", ",")
+            .replace("，", ",")
+            .replace(";", ",")
+            .replace("；", ",")
+        )
+        normalized = re.sub(r"\band\b", ",", normalized, flags=re.IGNORECASE)
+        keys = [
+            item.strip()
+            for item in normalized.split(",")
+            if item.strip() and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", item.strip())
+        ]
+        return keys
 
-    def _prepare_step_params(self, step: dict, params: dict) -> dict:
-        """准备步骤参数 - 自动推断常用参数"""
-        step_params = {}
+    @staticmethod
+    def _normalize_join_keys(raw_keys: Any) -> list[str]:
+        if raw_keys is None:
+            return []
+        if isinstance(raw_keys, list):
+            flattened: list[str] = []
+            for item in raw_keys:
+                flattened.extend(WorkflowEngine._normalize_join_keys(item))
+            return flattened
 
-        # 从步骤定义获取模板名
-        template = step.get("template", "")
+        text = str(raw_keys).strip()
+        if not text:
+            return []
 
-        # 根据模板类型自动生成参数
+        text = text.replace("和", ",").replace("、", ",").replace("，", ",").replace(";", ",").replace("；", ",")
+        text = re.sub(r"\band\b", ",", text, flags=re.IGNORECASE)
+        return [part.strip() for part in text.split(",") if part.strip()]
+
+    @staticmethod
+    def _normalize_partition(raw_partition: Any) -> str:
+        if raw_partition is None:
+            return ""
+
+        if isinstance(raw_partition, dict):
+            raw_partition = ",".join(f"{k}={v}" for k, v in raw_partition.items())
+        elif isinstance(raw_partition, list):
+            raw_partition = ",".join(str(item) for item in raw_partition if str(item).strip())
+
+        text = str(raw_partition).strip()
+        if not text:
+            return ""
+
+        if re.fullmatch(r"\d{4}[-/]\d{2}[-/]\d{2}", text):
+            text = f"ds={text}"
+
+        parts: list[str] = []
+        for segment in text.split(","):
+            piece = segment.strip()
+            if not piece:
+                continue
+            if "=" not in piece:
+                if re.fullmatch(r"\d{4}[-/]\d{2}[-/]\d{2}", piece):
+                    parts.append(f"ds='{piece.replace('/', '-')}'")
+                continue
+
+            field, value = piece.split("=", 1)
+            field = field.strip()
+            value = value.strip().strip("'\"")
+            if not field:
+                continue
+            parts.append(f"{field}='{value}'")
+
+        return ",".join(parts)
+
+    @staticmethod
+    def _partition_to_where(partition: str) -> str:
+        if not partition:
+            return ""
+        return " AND ".join(part.strip() for part in partition.split(",") if part.strip())
+
+    @staticmethod
+    def _build_target_partition(partition: str, temp_suffix: str) -> str:
+        if not partition:
+            return ""
+        output: list[str] = []
+        for segment in partition.split(","):
+            piece = segment.strip()
+            if not piece or "=" not in piece:
+                continue
+            field, value = piece.split("=", 1)
+            normalized_value = value.strip().strip("'\"")
+            output.append(f"{field.strip()}='{normalized_value}{temp_suffix}'")
+        return ",".join(output)
+
+    @staticmethod
+    def _substitute_placeholders(text: str, params: dict[str, Any]) -> str:
+        def _replace(match: re.Match[str]) -> str:
+            key = match.group(1).strip()
+            value = params.get(key)
+            if value is None:
+                return match.group(0)
+            return str(value)
+
+        return re.sub(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}", _replace, text)
+
+    def _normalize_table(self, params: dict[str, Any], env: str | None) -> tuple[str, str]:
+        db = str(params.get("db", "") or params.get("schema", "")).strip()
+        table_name = str(params.get("table_name", "") or params.get("table", "")).strip()
+
+        if table_name and "." in table_name and not db:
+            possible_db, simple_table = table_name.split(".", 1)
+            if possible_db and simple_table:
+                db = possible_db.strip()
+                table_name = simple_table.strip()
+
+        if table_name:
+            discovered = discover_db_names_by_table(table_name, env=env)
+            if discovered:
+                params["possible_dbs"] = discovered
+                if not db or db not in discovered:
+                    db = self._select_best_db(table_name, discovered)
+                    params["resolved_db"] = db
+            elif not db:
+                inferred = self._infer_db_from_table_name(table_name)
+                if inferred:
+                    db = inferred
+                    params["resolved_db"] = db
+
+        return db, table_name
+
+    @staticmethod
+    def _infer_db_from_table_name(table_name: str) -> str:
+        table_text = str(table_name or "").lower()
+        if not table_text:
+            return ""
+
+        for db_name in DB_NAME_HINTS:
+            short_name = db_name[4:] if db_name.startswith("imd_") else db_name
+            if short_name and short_name in table_text:
+                return db_name
+        return ""
+
+    @staticmethod
+    def _select_best_db(table_name: str, discovered_dbs: list[str]) -> str:
+        if not discovered_dbs:
+            return ""
+        if len(discovered_dbs) == 1:
+            return discovered_dbs[0]
+
+        table_text = str(table_name or "").lower()
+        best_db = discovered_dbs[0]
+        best_score = -1
+        for db_name in discovered_dbs:
+            db_text = str(db_name).lower()
+            short_db = db_text[4:] if db_text.startswith("imd_") else db_text
+            db_tokens = [token for token in short_db.split("_") if token]
+
+            score = 0
+            if short_db and short_db in table_text:
+                score += 100
+            score += sum(10 for token in db_tokens if token in table_text)
+            score += sum(1 for token in db_tokens if re.search(rf"\b{re.escape(token)}\b", table_text))
+
+            if score > best_score:
+                best_score = score
+                best_db = db_name
+
+        return best_db
+    def _enrich_params(
+        self,
+        scenario: ScenarioConfig,
+        raw_params: dict[str, Any],
+        env: str | None,
+        user_input: str = "",
+    ) -> tuple[dict[str, Any], str | None]:
+        params = dict(scenario.defaults)
+        params.update(raw_params or {})
+
+        db, table_name = self._normalize_table(params, env)
+        params["db"] = db
+        params["table_name"] = table_name
+        params["table_name_full"] = f"{db}.{table_name}" if db and table_name else table_name
+
+        raw_partition = params.get("raw_partition")
+        if not raw_partition and params.get("partition"):
+            raw_partition = params.get("partition")
+        if not raw_partition and user_input:
+            raw_partition = self._extract_raw_partition_from_text(user_input)
+        params["raw_partition"] = raw_partition or ""
+
+        normalized_partition = self._normalize_partition(raw_partition)
+        params["partition"] = normalized_partition
+
+        if db and table_name:
+            validation = validate_partition_from_metadata(
+                db_name=db,
+                table_name=table_name,
+                raw_partition=params.get("raw_partition", ""),
+                env=env,
+            )
+            if not validation.get("valid", True):
+                return params, str(validation.get("message", "Partition validation failed"))
+            formatted_partition = validation.get("formatted_partition")
+            if formatted_partition:
+                params["partition"] = formatted_partition
+
+        join_keys = self._normalize_join_keys(params.get("join_keys"))
+        if not join_keys and user_input:
+            join_keys = self._extract_join_keys_from_text(user_input)
+        params["join_keys"] = join_keys
+
+        temp_suffix = str(params.get("temp_suffix", "-temp")).strip() or "-temp"
+        params["temp_suffix"] = temp_suffix
+
+        params["target_partition"] = self._build_target_partition(params["partition"], temp_suffix)
+        params["partition_where"] = self._partition_to_where(params["partition"])
+        params["target_partition_where"] = self._partition_to_where(params["target_partition"])
+
+        return params, None
+
+    def _validate_required_params(self, scenario: ScenarioConfig, params: dict[str, Any]) -> str | None:
+        for field_name in scenario.required_params:
+            value = params.get(field_name)
+            if field_name == "join_keys":
+                check = validate_join_keys(self._normalize_join_keys(value))
+                if not check.get("valid", False):
+                    return str(check.get("message", "join_keys is required"))
+                continue
+
+            if value is None:
+                return f"Missing required parameter: {field_name}"
+            if isinstance(value, str) and not value.strip():
+                return f"Missing required parameter: {field_name}"
+            if isinstance(value, list) and len(value) == 0:
+                return f"Missing required parameter: {field_name}"
+        return None
+
+    def _build_step_params(
+        self,
+        step: dict[str, Any],
+        params: dict[str, Any],
+        env: str | None,
+    ) -> dict[str, Any]:
+        template = str(step.get("template", "")).strip()
+        if not template:
+            raise ValueError("Step template is empty")
+
         if template == "move_partition":
             step_params = {
-                "table_name": params.get("table_name_full", ""),
-                "source_partition": params.get("partition", ""),
-                "target_partition": params.get("target_partition", ""),
+                "table_name": params["table_name_full"],
+                "source_partition": params["partition"],
+                "target_partition": params["target_partition"],
             }
-        elif template == "data_num":
-            # 判断是原分区还是 temp 分区
-            step_name = step.get("name", "")
-            if "temp" in step_name:
-                step_params = {
-                    "table_name": params.get("table_name_full", ""),
-                    "partition": params.get("target_partition_where", ""),
-                }
-            else:
-                step_params = {
-                    "table_name": params.get("table_name_full", ""),
-                    "partition": params.get("partition_where", ""),
-                }
-        elif template == "data_diff":
-            # 导入 generate 模块获取 data_diff 完整逻辑
-            from generate import prepare_data_diff_params
+            return prepare_params(template, step_params, env=env)
 
-            db_name = params.get("db", "")
-            table_name = params.get("table_name", "")
-            source_partition = params.get("partition_where", "")
-            target_partition = params.get("target_partition_where", "")
-            join_keys = params.get("join_keys", [])
-
-            # 调用 generate 模块的完整逻辑
-            step_params = prepare_data_diff_params(
-                db_name, table_name,
-                source_partition, target_partition,
-                join_keys, self.env
+        if template == "data_num":
+            role = str(step.get("partition_role", "source")).strip().lower()
+            partition_value = (
+                params["target_partition_where"] if role == "target" else params["partition_where"]
             )
-        else:
-            # 其他模板，使用通用逻辑
-            for key, value in step.get("params", {}).items():
-                if isinstance(value, str):
-                    value = self.substitute_params(value, params)
+            step_params = {
+                "table_name": params["table_name_full"],
+                "partition": partition_value,
+            }
+            return prepare_params(template, step_params, env=env)
+
+        if template == "data_diff":
+            step_params = prepare_data_diff_params(
+                db_name=params.get("db", ""),
+                table_name=params.get("table_name", ""),
+                source_partition=params.get("partition_where", ""),
+                target_partition=params.get("target_partition_where", ""),
+                join_keys=params.get("join_keys", []),
+                env=env,
+            )
+            if step_params.get("non_partition_columns") and not step_params.get("compare_columns"):
+                step_params["compare_columns"] = step_params["non_partition_columns"]
+            if not step_params.get("compare_columns"):
+                step_params["compare_columns"] = list(params.get("join_keys", []))
+            return prepare_params(template, step_params, env=env)
+
+        # Generic template step with explicit params mapping.
+        raw_step_params = dict(step.get("params", {}) or {})
+        step_params: dict[str, Any] = {}
+        for key, value in raw_step_params.items():
+            if isinstance(value, str):
+                step_params[key] = self._substitute_placeholders(value, params)
+            else:
                 step_params[key] = value
+        return prepare_params(template, step_params, env=env)
 
-        return step_params
+    def _render_steps(
+        self,
+        scenario: ScenarioConfig,
+        params: dict[str, Any],
+        env: str | None,
+    ) -> tuple[list[str], list[str]]:
+        step_names: list[str] = []
+        generated_sql: list[str] = []
 
-    def execute(self, user_input: str, explicit_scenario: str | None = None) -> dict:
-        """执行场景"""
-        # 1. 识别场景
-        scenario_name = explicit_scenario or self.recognize(user_input)
-        if not scenario_name:
+        for step in scenario.steps:
+            name = str(step.get("name", step.get("template", "step"))).strip()
+            template = str(step.get("template", "")).strip()
+            step_names.append(name)
+
+            step_params = self._build_step_params(step, params, env)
+            sql, _ = render_template(template, step_params)
+            generated_sql.append(f"-- Step: {name}\n{sql}")
+
+        return step_names, generated_sql
+
+    def execute_from_payload(
+        self,
+        scenario_name: str,
+        payload_params: dict[str, Any],
+        *,
+        env: str | None = None,
+        user_input: str = "",
+    ) -> dict[str, Any]:
+        scenario = self.scenarios.get(scenario_name)
+        if not scenario:
             return {
                 "success": False,
-                "error": f"无法识别场景类型: {user_input}",
-                "message": "请明确说明场景类型，如'对比数据'或'校验数据'",
+                "error": f"Unknown scenario: {scenario_name}",
             }
 
-        # 2. 获取场景配置
-        config = self.scenarios.get(scenario_name)
-        if not config:
-            return {"success": False, "error": f"未找到场景: {scenario_name}"}
+        effective_env = env or self.env
+        params, enrich_error = self._enrich_params(
+            scenario=scenario,
+            raw_params=payload_params,
+            env=effective_env,
+            user_input=user_input,
+        )
+        if enrich_error:
+            return {
+                "success": False,
+                "scenario": scenario.name,
+                "error": enrich_error,
+                "params": params,
+            }
 
-        # 3. 提取参数
-        params = self.extract_params(user_input)
+        validate_error = self._validate_required_params(scenario, params)
+        if validate_error:
+            return {
+                "success": False,
+                "scenario": scenario.name,
+                "error": validate_error,
+                "params": params,
+            }
 
-        # 4. 设置默认值
-        for name, defn in config.params_def.items():
-            if name not in params and "default" in defn:
-                params[name] = defn["default"]
-
-        # 5. 自动丰富参数
-        params = self._enrich_params(params)
-
-        # 6. 验证参数
-        is_valid, error_msg = self.validate_params(params, config.params_def)
-        if not is_valid:
-            return {"success": False, "error": error_msg, "message": error_msg}
-
-        # 7. 生成 SQL
-        from generate import render_template
-
-        generated_sql = []
-        for step in config.steps:
-            step_name = step.get("name", "")
-            template = step.get("template", "")
-
-            # 自动准备参数
-            step_params = self._prepare_step_params(step, params)
-
-            try:
-                sql, _ = render_template(template, step_params)
-                generated_sql.append(f"-- Step: {step_name}\n{sql}")
-            except Exception as e:
-                generated_sql.append(f"-- Step: {step_name} (Error: {e})")
+        try:
+            step_names, generated_sql = self._render_steps(
+                scenario=scenario,
+                params=params,
+                env=effective_env,
+            )
+        except Exception as exc:
+            return {
+                "success": False,
+                "scenario": scenario.name,
+                "error": f"Failed to render workflow SQL: {exc}",
+                "params": params,
+            }
 
         return {
             "success": True,
-            "scenario": scenario_name,
-            "description": config.description,
+            "scenario": scenario.name,
+            "description": scenario.description,
+            "env": effective_env,
             "params": params,
-            "steps": [s.get("name") for s in config.steps],
+            "steps": step_names,
             "generated_sql": generated_sql,
-            "message": f"成功生成 {len(config.steps)} 个步骤的 SQL",
+            "message": f"Generated {len(step_names)} workflow steps",
         }
 
-    def format_result(self, result: dict) -> str:
-        """格式化结果为 markdown"""
-        lines = []
+    def execute_from_text(
+        self,
+        user_input: str,
+        explicit_scenario: str | None = None,
+        *,
+        env: str | None = None,
+    ) -> dict[str, Any]:
+        scenario_name = explicit_scenario or self.recognize_scenario(user_input)
+        if not scenario_name:
+            return {
+                "success": False,
+                "error": f"Cannot recognize scenario from input: {user_input}",
+            }
+        params = self.extract_params_from_text(user_input)
+        return self.execute_from_payload(
+            scenario_name=scenario_name,
+            payload_params=params,
+            env=env,
+            user_input=user_input,
+        )
 
+    def execute(self, user_input: str, explicit_scenario: str | None = None) -> dict[str, Any]:
+        """Backward compatible entrypoint."""
+        return self.execute_from_text(user_input=user_input, explicit_scenario=explicit_scenario)
+
+    def execute_from_yaml(
+        self,
+        yaml_path: Path,
+        explicit_scenario: str | None = None,
+        *,
+        env: str | None = None,
+    ) -> dict[str, Any]:
+        payload = yaml.safe_load(yaml_path.read_text(encoding="utf-8-sig")) or {}
+        if not isinstance(payload, dict):
+            return {
+                "success": False,
+                "error": f"YAML payload must be a mapping: {yaml_path}",
+            }
+
+        scenario_name = explicit_scenario or str(
+            payload.get("scenario") or payload.get("workflow") or payload.get("type") or ""
+        ).strip()
+        if not scenario_name:
+            return {
+                "success": False,
+                "error": f"Scenario is missing in YAML: {yaml_path}",
+            }
+
+        params = payload.get("params")
+        if not isinstance(params, dict):
+            params = {
+                key: value
+                for key, value in payload.items()
+                if key not in {"scenario", "workflow", "type", "env"}
+            }
+
+        effective_env = env or str(payload.get("env") or "").strip() or None
+        return self.execute_from_payload(
+            scenario_name=scenario_name,
+            payload_params=params,
+            env=effective_env,
+        )
+
+    def format_result(self, result: dict[str, Any]) -> str:
         if not result.get("success"):
-            lines.append("## ❌ 执行失败\n")
-            lines.append(f"- {result.get('error')}")
-            return "\n".join(lines)
+            return "\n".join(
+                [
+                    "## SQL Workflow Failed",
+                    f"- {result.get('error', 'Unknown error')}",
+                ]
+            )
 
-        lines.append("## ✅ SQL 场景执行结果\n")
-        lines.append(f"**场景**: {result.get('description', result.get('scenario'))}")
-        lines.append(f"**步骤数**: {len(result.get('steps', []))}\n")
-        lines.append("### 生成的 SQL:\n")
+        lines = [
+            "## SQL Workflow Result",
+            f"**Scenario**: {result.get('description') or result.get('scenario')}",
+            f"**Step Count**: {len(result.get('steps', []))}",
+            "",
+            "### Generated SQL",
+        ]
 
-        for i, sql in enumerate(result.get("generated_sql", []), 1):
-            lines.append(f"#### Step {i}")
+        for index, sql in enumerate(result.get("generated_sql", []), start=1):
+            lines.append("")
+            lines.append(f"#### Step {index}")
             lines.append("```sql")
             lines.append(sql)
-            lines.append("```\n")
-
+            lines.append("```")
         return "\n".join(lines)
 
-    def save_result(self, result: dict, output_path: Path | None = None) -> Path | None:
-        """保存结果到文件"""
+    @staticmethod
+    def _sanitize_filename_token(value: str) -> str:
+        token = re.sub(r"[^A-Za-z0-9]+", "_", str(value or "").strip()).strip("_")
+        return token.lower()
+
+    @classmethod
+    def _partition_label(cls, partition: str) -> str:
+        cleaned = str(partition or "").replace("'", "").replace('"', "").strip()
+        if not cleaned:
+            return ""
+
+        labels: list[str] = []
+        for segment in cleaned.split(","):
+            piece = segment.strip()
+            if not piece or "=" not in piece:
+                continue
+            field, value = piece.split("=", 1)
+            field_token = cls._sanitize_filename_token(field)
+            value_token = cls._sanitize_filename_token(value)
+            if not field_token or not value_token:
+                continue
+            if field_token == "ds" and re.fullmatch(r"\d{4}_\d{2}_\d{2}", value_token):
+                labels.append(value_token.replace("_", ""))
+            else:
+                labels.append(f"{field_token}_{value_token}")
+
+        return "_".join(labels)
+
+    def _build_default_output_path(self, result: dict[str, Any]) -> Path:
+        scenario = self._sanitize_filename_token(str(result.get("scenario") or "workflow")) or "workflow"
+        params = result.get("params") or {}
+        table_name = str(params.get("table_name") or params.get("table_name_full") or "")
+        table_token = self._sanitize_filename_token(table_name)
+        partition_token = self._partition_label(str(params.get("partition") or ""))
+
+        if table_token and partition_token:
+            filename = f"{scenario}_{table_token}_{partition_token}.sql"
+        elif table_token:
+            filename = f"{scenario}_{table_token}.sql"
+        else:
+            filename = f"{scenario}_workflow.sql"
+
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        return OUTPUT_DIR / filename
+
+    def save_result(self, result: dict[str, Any], output_path: Path | None = None) -> Path | None:
         if not result.get("success"):
             return None
 
-        # 默认保存到 output 目录
         if output_path is None:
-            output_dir = Path(__file__).parent / "output"
-            output_dir.mkdir(exist_ok=True)
+            output_path = self._build_default_output_path(result)
+        else:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # 生成文件名：场景名_时间戳.sql
-            from datetime import datetime
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            scenario = result.get("scenario", "scenario")
-            output_path = output_dir / f"{scenario}_{timestamp}.sql"
-
-        # 合并所有 SQL
         all_sql = "\n\n".join(result.get("generated_sql", []))
-
-        # 保存文件
         output_path.write_text(all_sql, encoding="utf-8")
         return output_path
 
+# Backward-compatible alias for existing callers.
+ScenarioExecutor = WorkflowEngine
 
-def main():
-    """CLI 入口"""
-    import argparse
 
-    parser = argparse.ArgumentParser(description="SQL 场景执行器")
-    parser.add_argument("input", help="用户自然语言输入")
-    parser.add_argument("--scenario", help="指定场景类型")
-    parser.add_argument("--env", help="Hive 环境")
-    parser.add_argument("--output", "-o", help="输出文件路径（默认保存到 output 目录）")
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="SQL workflow deterministic generator")
+    parser.add_argument("input", nargs="?", help="Natural language input (legacy mode)")
+    parser.add_argument("--yaml", help="Semantic YAML input path (preferred mode)")
+    parser.add_argument("--scenario", help="Explicit scenario name override")
+    parser.add_argument("--env", help="Hive environment")
+    parser.add_argument("--output", "-o", help="Output SQL file path")
+    parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Do not write generated SQL file",
+    )
+    return parser
 
+
+def main() -> int:
+    parser = build_arg_parser()
     args = parser.parse_args()
 
-    executor = ScenarioExecutor(env=args.env)
-    result = executor.execute(args.input, args.scenario)
+    if not args.input and not args.yaml:
+        parser.error("Provide either positional input or --yaml")
 
-    # 打印到控制台
-    print(executor.format_result(result))
+    engine = WorkflowEngine(env=args.env)
 
-    # 保存到文件
-    output_path = Path(args.output) if args.output else None
-    saved_path = executor.save_result(result, output_path)
-    if saved_path:
-        print(f"\n💾 SQL 已保存到: {saved_path}")
+    if args.yaml:
+        result = engine.execute_from_yaml(
+            yaml_path=Path(args.yaml),
+            explicit_scenario=args.scenario,
+            env=args.env,
+        )
+    else:
+        result = engine.execute_from_text(
+            user_input=args.input,
+            explicit_scenario=args.scenario,
+            env=args.env,
+        )
+
+    print(engine.format_result(result))
+
+    if not args.no_save:
+        output_path = Path(args.output) if args.output else None
+        saved_path = engine.save_result(result, output_path)
+        if saved_path:
+            print(f"\nSaved SQL to: {saved_path}")
+
+    return 0 if result.get("success") else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
+
+
+
+
+
+
+
+
+
+
+

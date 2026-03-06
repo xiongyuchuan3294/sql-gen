@@ -1,41 +1,34 @@
-# 数据对比场景配置
-
 scenario:
-  name: "data_compare"
-  description: "对比原分区和 temp 分区的数据差异"
+  name: data_compare
+  description: Compare source partition with temp partition of the same table
   keywords:
-    - "对比"
-    - "比较"
-    - "差异"
-    - "compare"
-    - "diff"
+    - 对账工作流
+    - 对账流程
+    - 对账
+    - reconcile
+    - data compare
+    - compare
+    - diff
 
-# 场景参数定义
-# AI 自动从用户输入中理解并提取这些参数
-params:
-  table_name:
-    description: "表名，格式：db.table 或 table"
-    example: "imd_aml_safe.t_sql_hdfs_smoke"
-  partition:
-    description: "分区值，支持多种格式：ds=2026-01-01 或 2026-01-01 分区"
-    example: "ds=2026-02-01 或 2026-02-01"
-  join_keys:
-    description: "主键字段，多个用'和'或逗号分隔"
-    example: "cust_id 或 cust_id 和 case_date"
-  temp_suffix:
-    description: "temp 分区后缀"
-    default: "-temp"
+required_params:
+  - table_name
+  - partition
+  - join_keys
 
-# 场景步骤
+defaults:
+  temp_suffix: -temp
+
 steps:
-  - name: "创建 temp 分区并复制数据"
-    template: "move_partition"
+  - name: copy_source_partition_to_temp
+    template: move_partition
 
-  - name: "统计原分区数据量"
-    template: "data_num"
+  - name: count_source_partition
+    template: data_num
+    partition_role: source
 
-  - name: "统计 temp 分区数据量"
-    template: "data_num"
+  - name: count_temp_partition
+    template: data_num
+    partition_role: target
 
-  - name: "对比原分区和 temp 分区的差异"
-    template: "data_diff"
+  - name: diff_source_vs_temp
+    template: data_diff

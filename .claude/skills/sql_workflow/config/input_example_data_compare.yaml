@@ -1,0 +1,9 @@
+# AI should produce this semantic YAML, then sql_workflow script renders final SQL workflow.
+scenario: data_compare
+env: local_hs2
+params:
+  table_name: t_local_hs2_aml300_ads_safe_p_ds_dt
+  partition: ds=2026-02-01
+  join_keys:
+    - cust_id
+  temp_suffix: -temp

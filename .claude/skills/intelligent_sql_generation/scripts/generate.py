@@ -137,15 +137,45 @@ def load_hive_runtime():
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
 
-    # Try external hive-mcp directory first
-    hive_mcp_path = os.path.expanduser("~/workspace/hive-mcp")
-    if os.path.isdir(hive_mcp_path) and hive_mcp_path not in sys.path:
-        sys.path.insert(0, hive_mcp_path)
+    # Try external hive-mcp directories first.
+    parent_dir = os.path.dirname(repo_root)
+    candidate_paths = [
+        os.getenv("HIVE_MCP_PATH", "").strip(),
+        os.getenv("SQL_GEN_HIVE_MCP_PATH", "").strip(),
+        os.path.join(parent_dir, "hive-mcp"),
+        os.path.join(parent_dir, "hive-mcp-uat"),
+        os.path.expanduser("~/workspace/hive-mcp"),
+        os.path.expanduser("~/workspace/hive-mcp-uat"),
+        r"D:\workspace\hive-mcp",
+        r"D:\workspace\hive-mcp-uat",
+    ]
+    seen_paths = set()
+    valid_paths = []
+    for base_path in candidate_paths:
+        if not base_path:
+            continue
+        normalized = os.path.normpath(base_path)
+        if normalized in seen_paths or not os.path.isdir(normalized):
+            continue
+        seen_paths.add(normalized)
+        valid_paths.append(normalized)
+
+    # Keep candidate order as priority: earlier item = higher priority.
+    for normalized in reversed(valid_paths):
+        tools_path = os.path.join(normalized, "tools")
+        if os.path.isdir(tools_path) and tools_path not in sys.path:
+            sys.path.insert(0, tools_path)
+        if normalized not in sys.path:
+            sys.path.insert(0, normalized)
 
     try:
         from hive_client import HiveRuntimeConfig, JdbcHiveUtils
     except Exception:
-        return None, None
+        try:
+            # Repository layout uses tools/hive_client.py.
+            from tools.hive_client import HiveRuntimeConfig, JdbcHiveUtils
+        except Exception:
+            return None, None
 
     try:
         default_env = HiveRuntimeConfig.active_env()
@@ -168,7 +198,8 @@ def discover_db_names_by_table(table_name, env=None):
         )
         return []
 
-    effective_env = (env or default_env or "local").strip()
+    _ = env  # keep signature compatibility; runtime now uses active env only.
+    effective_env = (default_env or "local").strip()
     discovered = []
 
     try:
@@ -228,7 +259,8 @@ def discover_partition_fields(db_name, table_name, env=None):
     if jdbc_hive_utils is None:
         return {"is_partitioned": False, "partition_fields": []}
 
-    effective_env = (env or default_env or "local").strip()
+    _ = env  # keep signature compatibility; runtime now uses active env only.
+    effective_env = (default_env or "local").strip()
 
     try:
         # 使用 DESCRIBE FORMATTED 获取分区信息
@@ -507,7 +539,8 @@ def get_non_partition_columns(db_name: str, table_name: str, env=None) -> list[s
     if jdbc_hive_utils is None:
         return []
 
-    effective_env = (env or default_env or "local").strip()
+    _ = env  # keep signature compatibility; runtime now uses active env only.
+    effective_env = (default_env or "local").strip()
 
     try:
         # DESCRIBE table 获取所有字段
@@ -792,7 +825,6 @@ def main():
     parser = argparse.ArgumentParser(description="Generate Hive SQL from YAML config.")
     parser.add_argument('--yaml', required=True, help="Path to YAML configuration file")
     parser.add_argument('--template', help="Template name (defaults to 'type' in YAML)")
-    parser.add_argument('--env', help="Hive env name for table->db discovery (e.g. local, uat)")
     
     args = parser.parse_args()
     
@@ -811,7 +843,6 @@ def main():
     params = prepare_params(
         template_name,
         config.get('params', {}),
-        env=args.env,
     )
     content, ext = render_template(template_name, params)
     
