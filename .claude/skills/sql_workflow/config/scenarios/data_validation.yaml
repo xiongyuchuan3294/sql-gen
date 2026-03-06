@@ -1,0 +1,44 @@
+scenario:
+  name: data_validation
+  description: Validate partition data quality for one table
+  keywords:
+    - 校验工作流
+    - 校验流程
+    - 校验
+    - 检查
+    - 验证
+    - 数据校验
+    - 数据质量
+    - validation
+    - quality check
+    - dq
+
+required_params:
+  - table_name
+  - partition
+  - join_keys
+
+defaults:
+  having_threshold: 1
+
+steps:
+  - name: probe_table_metadata
+    template: metadata_probe
+    params:
+      db: "{{ db }}"
+      table_name: "{{ table_name }}"
+      table_name_full: "{{ table_name_full }}"
+      partition: "{{ partition }}"
+
+  - name: count_partition
+    template: data_num
+    partition_role: source
+
+  - name: null_checks
+    template: null_checks
+
+  - name: null_rate
+    template: null_rate
+
+  - name: duplicate_key_check
+    template: repeat_check

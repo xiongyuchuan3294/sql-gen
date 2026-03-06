@@ -1,0 +1,14 @@
+# AI should produce this semantic YAML, then sql_workflow script renders final SQL workflow.
+scenario: data_validation
+env: local_hs2
+params:
+  table_name: t_local_hs2_aml300_ads_safe_p_ds_dt
+  partition: ds=2026-02-01
+  join_keys:
+    - cust_id
+  validation_columns:
+    - cust_id
+    - status
+  group_by_columns:
+    - cust_id
+  having_threshold: 1

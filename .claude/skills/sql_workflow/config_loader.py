@@ -248,6 +248,31 @@ class WorkflowEngine:
         return [part.strip() for part in text.split(",") if part.strip()]
 
     @staticmethod
+    def _normalize_identifier_list(raw_value: Any) -> list[str]:
+        if raw_value is None:
+            return []
+        if isinstance(raw_value, list):
+            normalized: list[str] = []
+            for item in raw_value:
+                normalized.extend(WorkflowEngine._normalize_identifier_list(item))
+            return normalized
+
+        text = str(raw_value).strip()
+        if not text:
+            return []
+
+        text = text.replace("和", ",").replace("、", ",").replace("，", ",").replace(";", ",").replace("；", ",")
+        text = re.sub(r"\band\b", ",", text, flags=re.IGNORECASE)
+        output: list[str] = []
+        for part in text.split(","):
+            item = part.strip()
+            if not item:
+                continue
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", item):
+                output.append(item)
+        return output
+
+    @staticmethod
     def _normalize_partition(raw_partition: Any) -> str:
         if raw_partition is None:
             return ""
@@ -419,6 +444,25 @@ class WorkflowEngine:
             join_keys = self._extract_join_keys_from_text(user_input)
         params["join_keys"] = join_keys
 
+        validation_columns = self._normalize_identifier_list(
+            params.get("validation_columns") or params.get("columns")
+        )
+        if not validation_columns:
+            validation_columns = list(join_keys)
+        params["validation_columns"] = validation_columns
+
+        group_by_columns = self._normalize_identifier_list(params.get("group_by_columns"))
+        if not group_by_columns:
+            group_by_columns = list(join_keys)
+        params["group_by_columns"] = group_by_columns
+
+        having_threshold = params.get("having_threshold", 1)
+        try:
+            threshold = int(str(having_threshold).strip())
+        except Exception:
+            threshold = 1
+        params["having_threshold"] = threshold if threshold > 0 else 1
+
         temp_suffix = str(params.get("temp_suffix", "-temp")).strip() or "-temp"
         params["temp_suffix"] = temp_suffix
 
@@ -487,6 +531,33 @@ class WorkflowEngine:
                 step_params["compare_columns"] = step_params["non_partition_columns"]
             if not step_params.get("compare_columns"):
                 step_params["compare_columns"] = list(params.get("join_keys", []))
+            return prepare_params(template, step_params, env=env)
+
+        if template in {"null_checks", "null_rate"}:
+            columns = self._normalize_identifier_list(params.get("validation_columns"))
+            if not columns:
+                columns = self._normalize_identifier_list(params.get("join_keys"))
+            if not columns:
+                columns = ["id"]
+            step_params = {
+                "table_name": params["table_name_full"],
+                "partition": params.get("partition_where", ""),
+                "columns": columns,
+            }
+            return prepare_params(template, step_params, env=env)
+
+        if template == "repeat_check":
+            group_by_columns = self._normalize_identifier_list(params.get("group_by_columns"))
+            if not group_by_columns:
+                group_by_columns = self._normalize_identifier_list(params.get("join_keys"))
+            if not group_by_columns:
+                group_by_columns = ["id"]
+            step_params = {
+                "table_name": params["table_name_full"],
+                "partition": params.get("partition_where", ""),
+                "group_by_columns": group_by_columns,
+                "having_threshold": params.get("having_threshold", 1),
+            }
             return prepare_params(template, step_params, env=env)
 
         # Generic template step with explicit params mapping.
@@ -608,6 +679,39 @@ class WorkflowEngine:
         """Backward compatible entrypoint."""
         return self.execute_from_text(user_input=user_input, explicit_scenario=explicit_scenario)
 
+    @staticmethod
+    def _resolve_input_yaml_path(yaml_path: Path) -> Path:
+        """Resolve user-provided YAML path for replay mode.
+
+        Supports:
+        - absolute or relative existing path
+        - `output/<file>.yaml` from any cwd
+        - `/output/<file>.yaml` shorthand
+        - `<file>.yaml` shorthand (auto lookup in sql_workflow/output)
+        """
+        candidate = Path(str(yaml_path).strip())
+        if candidate.exists():
+            return candidate
+
+        candidate_text = candidate.as_posix()
+        probe_paths: list[Path] = []
+
+        if not candidate.is_absolute():
+            probe_paths.append(CURRENT_DIR / candidate)
+
+        if candidate_text.startswith("/output/"):
+            probe_paths.append(OUTPUT_DIR / candidate_text.removeprefix("/output/"))
+        elif candidate_text.startswith("output/"):
+            probe_paths.append(OUTPUT_DIR / candidate_text.removeprefix("output/"))
+
+        if not candidate.is_absolute() and len(candidate.parts) == 1:
+            probe_paths.append(OUTPUT_DIR / candidate.name)
+
+        for path in probe_paths:
+            if path.exists():
+                return path
+        return candidate
+
     def execute_from_yaml(
         self,
         yaml_path: Path,
@@ -615,11 +719,18 @@ class WorkflowEngine:
         *,
         env: str | None = None,
     ) -> dict[str, Any]:
-        payload = yaml.safe_load(yaml_path.read_text(encoding="utf-8-sig")) or {}
+        resolved_yaml_path = self._resolve_input_yaml_path(yaml_path)
+        if not resolved_yaml_path.exists():
+            return {
+                "success": False,
+                "error": f"YAML file not found: {yaml_path}",
+            }
+
+        payload = yaml.safe_load(resolved_yaml_path.read_text(encoding="utf-8-sig")) or {}
         if not isinstance(payload, dict):
             return {
                 "success": False,
-                "error": f"YAML payload must be a mapping: {yaml_path}",
+                "error": f"YAML payload must be a mapping: {resolved_yaml_path}",
             }
 
         scenario_name = explicit_scenario or str(
@@ -628,7 +739,7 @@ class WorkflowEngine:
         if not scenario_name:
             return {
                 "success": False,
-                "error": f"Scenario is missing in YAML: {yaml_path}",
+                "error": f"Scenario is missing in YAML: {resolved_yaml_path}",
             }
 
         params = payload.get("params")
@@ -783,12 +894,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-
-
-
-
 
 
 

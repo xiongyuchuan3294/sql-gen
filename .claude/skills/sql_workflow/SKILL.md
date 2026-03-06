@@ -53,6 +53,7 @@ Notes:
 
 ### Step 1: NL -> YAML (AI)
 Extract workflow type and parameters from user text.
+When SQL is generated from NL input, it only writes SQL output by default.
 
 ### Step 2: YAML -> SQL (Python)
 Run:
@@ -61,6 +62,21 @@ Run:
 python .claude/skills/sql_workflow/orchestrator.py --yaml <semantic_yaml_path>
 ```
 
+可选择下述两种模式：
+
+```bash
+# 1) 用自然语言生成 SQL（自动保存到 output/）
+python .claude/skills/sql_workflow/orchestrator.py "对账工作流：t_xxx 的 2026-02-01 分区 主键 id"
+
+# 2) 用 YAML 生成 SQL
+python .claude/skills/sql_workflow/orchestrator.py --yaml .claude/skills/sql_workflow/config/input_example_data_compare.yaml
+python .claude/skills/sql_workflow/orchestrator.py --yaml .claude/skills/sql_workflow/config/input_example_data_validation.yaml
+```
+
+`--yaml` 路径兼容：
+- 推荐路径：`.claude/skills/sql_workflow/config/*.yaml`
+- 也支持任意可访问的 YAML 文件路径
+
 Optional:
 - `--scenario data_compare`
 - `--env local_hs2`
@@ -68,8 +84,9 @@ Optional:
 - `--no-save`
 
 Default save behavior:
-- If `--output` is not provided, workflow saves to a single deterministic SQL file:
+- If `--output` is not provided, workflow saves deterministic SQL file:
   - `data_compare_<table>_<partition>.sql`
+- If `--output` is provided (e.g. `xx.sql`), only SQL is written.
 
 ### Step 3: Return SQL
 Return generated multi-step SQL in code blocks.
@@ -88,6 +105,18 @@ Generated steps:
 
 Scenario definition: `config/scenarios/data_compare.yaml`
 
+### data_validation
+Purpose: validate one table partition quality.
+
+Generated steps:
+1. `metadata_probe`
+2. `data_num`
+3. `null_checks`
+4. `null_rate`
+5. `repeat_check`
+
+Scenario definition: `config/scenarios/data_validation.yaml`
+
 ## Fallback Mode
 If YAML is not provided, script supports legacy text input:
 
@@ -95,4 +124,10 @@ If YAML is not provided, script supports legacy text input:
 python .claude/skills/sql_workflow/orchestrator.py "对账工作流：t_xxx 的 2026-02-01 分区 主键 id"
 ```
 
-But YAML mode is preferred for stability and reproducibility.
+Then rerun deterministically without LLM:
+
+```bash
+python .claude/skills/sql_workflow/orchestrator.py --yaml .claude/skills/sql_workflow/config/input_example_data_compare.yaml
+```
+
+YAML mode is preferred for stability and reproducibility.
