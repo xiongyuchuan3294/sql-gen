@@ -1,4 +1,4 @@
-﻿---
+---
 name: intelligent_sql_generation
 description: Intelligent SQL Generation Agent for Hive
 version: 1.0.0

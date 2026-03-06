@@ -19,6 +19,14 @@ defaults:
   temp_suffix: -temp
 
 steps:
+  - name: probe_table_metadata
+    template: metadata_probe
+    params:
+      db: "{{ db }}"
+      table_name: "{{ table_name }}"
+      table_name_full: "{{ table_name_full }}"
+      partition: "{{ partition }}"
+
   - name: copy_source_partition_to_temp
     template: move_partition
 

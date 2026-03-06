@@ -324,14 +324,13 @@ class WorkflowEngine:
                 db = possible_db.strip()
                 table_name = simple_table.strip()
 
-        if table_name:
+        if table_name and not db:
             discovered = discover_db_names_by_table(table_name, env=env)
             if discovered:
                 params["possible_dbs"] = discovered
-                if not db or db not in discovered:
-                    db = self._select_best_db(table_name, discovered)
-                    params["resolved_db"] = db
-            elif not db:
+                db = self._select_best_db(table_name, discovered)
+                params["resolved_db"] = db
+            else:
                 inferred = self._infer_db_from_table_name(table_name)
                 if inferred:
                     db = inferred
@@ -784,7 +783,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
 
 
 

@@ -1,6 +1,0 @@
-type: move_partition
-params:
-  table: t_local_hs2_aml300_ads_safe_p_ds_dt
-  db: imd_aml300_ads_safe
-  source_partition: ds='2026-02-01'
-  target_partition: ds='2026-02-01-temp'
