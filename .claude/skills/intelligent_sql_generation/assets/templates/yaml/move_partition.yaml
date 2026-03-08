@@ -1,0 +1,7 @@
+type: "move_partition"
+description: "Copy data from one partition to another partition, for example into a temp backup partition"
+params:
+  table_name: "example_table"               # table name
+  db: "imd_aml_safe"                        # database name (optional, auto-discovery by default)
+  source_partition: "ds='2026-02-01'"       # source partition
+  target_partition: "ds='2026-02-01-temp'"  # target partition

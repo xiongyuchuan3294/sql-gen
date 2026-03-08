@@ -1,34 +1,37 @@
 ---
 name: sql_workflow
 description: SQL Workflow Orchestrator - YAML driven multi-step workflow SQL generation
-version: 2.0.0
 ---
 
 # SQL Workflow Skill
 
 ## Trigger Rules
-Use this skill when user intent includes:
-- `执行sql工作流` / `sql流程`
-- `对账工作流` / `对账流程`
-- `校验工作流` / `校验流程`
-- Any request requiring multi-step SQL orchestration
+Use this skill when the request clearly asks for multi-step SQL generation, for example:
+- `run a SQL workflow`
+- `reconciliation workflow`
+- `validation workflow`
+- any request that needs multiple SQL steps orchestrated in one result
 
-## Core Design (Aligned with intelligent_sql_generation)
-1. AI parses natural language into a **semantic YAML input**.
-2. Python scripts consume that YAML and deterministically generate final workflow SQL.
-3. SQL generation should not depend on extra LLM reasoning after YAML is produced.
-4. Reuse helpers from `../intelligent_sql_generation/scripts/generate.py` for:
-   - db discovery
-   - partition extraction/validation
-   - join key validation
-   - template rendering
+Chinese-language workflow trigger phrases remain supported in addition to English phrasing.
+
+## Core Design
+1. The model converts natural language into semantic YAML.
+2. Python scripts convert that YAML into deterministic workflow SQL.
+3. Once YAML exists, SQL generation should not depend on additional LLM reasoning.
+4. Reuse helpers from `../intelligent_sql_generation/scripts/generate.py` for metadata discovery, partition handling, join-key validation, and template rendering through the configured shared Hive MCP server session.
 
 ## Source of Truth
-When files disagree, use this order:
-1. `config/scenarios/*.yaml` (workflow definitions)
-2. `config_loader.py` (deterministic engine)
-3. `orchestrator.py` (compatibility wrapper)
-4. `../intelligent_sql_generation/templates/sql/*.sql` (single-step templates)
+When files disagree, follow this order:
+1. `assets/scenarios/*.yaml`
+2. `scripts/config_loader.py`
+3. `scripts/orchestrator.py`
+4. `../intelligent_sql_generation/assets/templates/sql/*.sql`
+
+## Resource Layout
+- Deterministic scripts: `scripts/`
+- Workflow definitions: `assets/scenarios/`
+- Example semantic YAML: `assets/examples/`
+- Runtime outputs: `output/` (generated locally, not committed)
 
 ## Semantic YAML Contract
 Preferred runtime input:
@@ -45,68 +48,65 @@ params:
 ```
 
 Notes:
-- `table_name` supports `db.table` or table-only. 推荐只传表名，脚本会自动发现并选择最匹配的库名。
-- `partition` supports `ds=2026-02-01` or `2026-02-01` (auto-normalized).
-- `join_keys` supports string or list; final engine normalizes to list.
+- `table_name` supports `db.table` or table-only. Table-only input is preferred if you want the script to discover the best matching database.
+- `partition` supports `ds=2026-02-01` or `2026-02-01`.
+- `join_keys` supports either a string or a list.
 
 ## Execution Workflow
+### Step 1: Natural language -> YAML
+Extract the workflow type and parameters from user text.
 
-### Step 1: NL -> YAML (AI)
-Extract workflow type and parameters from user text.
-When SQL is generated from NL input, it only writes SQL output by default.
-
-### Step 2: YAML -> SQL (Python)
+### Step 2: YAML -> SQL
 Run:
 
 ```bash
-python .claude/skills/sql_workflow/orchestrator.py --yaml <semantic_yaml_path>
+python .claude/skills/sql_workflow/scripts/orchestrator.py --yaml <semantic_yaml_path>
 ```
 
-可选择下述两种模式：
+Two common modes:
 
 ```bash
-# 1) 用自然语言生成 SQL（自动保存到 output/）
-python .claude/skills/sql_workflow/orchestrator.py "对账工作流：t_xxx 的 2026-02-01 分区 主键 id"
+# 1) Generate SQL from natural language and save into output/
+python .claude/skills/sql_workflow/scripts/orchestrator.py "Reconciliation workflow for t_xxx on ds=2026-02-01 with primary key id"
 
-# 2) 用 YAML 生成 SQL
-python .claude/skills/sql_workflow/orchestrator.py --yaml .claude/skills/sql_workflow/config/input_example_data_compare.yaml
-python .claude/skills/sql_workflow/orchestrator.py --yaml .claude/skills/sql_workflow/config/input_example_data_validation.yaml
+# 2) Generate SQL from YAML
+python .claude/skills/sql_workflow/scripts/orchestrator.py --yaml .claude/skills/sql_workflow/assets/examples/input_example_data_compare.yaml
+python .claude/skills/sql_workflow/scripts/orchestrator.py --yaml .claude/skills/sql_workflow/assets/examples/input_example_data_validation.yaml
 ```
 
-`--yaml` 路径兼容：
-- 推荐路径：`.claude/skills/sql_workflow/config/*.yaml`
-- 也支持任意可访问的 YAML 文件路径
+`--yaml` path support:
+- recommended: `.claude/skills/sql_workflow/assets/examples/*.yaml`
+- also supports any accessible YAML file path
 
-Optional:
+Optional flags:
 - `--scenario data_compare`
 - `--env local_hs2`
 - `--output <path>`
 - `--no-save`
 
 Default save behavior:
-- If `--output` is not provided, workflow saves deterministic SQL file:
-  - `data_compare_<table>_<partition>.sql`
-- If `--output` is provided (e.g. `xx.sql`), only SQL is written.
+- without `--output`, the workflow writes a deterministic SQL filename
+- with `--output`, only the SQL file is written to the specified path
 
 ### Step 3: Return SQL
-Return generated multi-step SQL in code blocks.
-Do not execute SQL unless user explicitly asks to execute.
+Return multi-step SQL in fenced code blocks.
+Do not execute SQL unless the user explicitly asks for execution.
 
-## Current Supported Workflow
-
+## Supported Workflows
 ### data_compare
-Purpose: compare source partition vs temp partition for one table.
+Purpose: compare a source partition with its temp partition.
 
 Generated steps:
-1. `move_partition`
-2. `data_num` (source)
-3. `data_num` (temp)
-4. `data_diff`
+1. `metadata_probe`
+2. `move_partition`
+3. `data_num` (source)
+4. `data_num` (target)
+5. `data_diff`
 
-Scenario definition: `config/scenarios/data_compare.yaml`
+Scenario definition: `assets/scenarios/data_compare.yaml`
 
 ### data_validation
-Purpose: validate one table partition quality.
+Purpose: validate partition data quality for one table.
 
 Generated steps:
 1. `metadata_probe`
@@ -115,19 +115,13 @@ Generated steps:
 4. `null_rate`
 5. `repeat_check`
 
-Scenario definition: `config/scenarios/data_validation.yaml`
+Scenario definition: `assets/scenarios/data_validation.yaml`
 
 ## Fallback Mode
-If YAML is not provided, script supports legacy text input:
+If YAML is not provided, the script can still parse legacy text input:
 
 ```bash
-python .claude/skills/sql_workflow/orchestrator.py "对账工作流：t_xxx 的 2026-02-01 分区 主键 id"
+python .claude/skills/sql_workflow/scripts/orchestrator.py "Validation workflow for t_xxx on ds=2026-02-01 with primary key id"
 ```
 
-Then rerun deterministically without LLM:
-
-```bash
-python .claude/skills/sql_workflow/orchestrator.py --yaml .claude/skills/sql_workflow/config/input_example_data_compare.yaml
-```
-
-YAML mode is preferred for stability and reproducibility.
+For reproducibility, YAML mode is preferred.

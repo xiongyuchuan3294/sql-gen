@@ -1,0 +1,4 @@
+interface:
+  display_name: "Intelligent SQL Generation"
+  short_description: "Generate Hive SQL and HDFS commands from templates"
+  default_prompt: "Use $intelligent_sql_generation to generate Hive SQL or HDFS commands from a natural-language request or a template YAML."

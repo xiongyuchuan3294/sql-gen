@@ -1,7 +1,0 @@
-type: "move_partition"
-description: "将分区数据移动到另一个分区（如备份到 temp 分区）"
-params:
-  table_name: "example_table"          # 表名
-  db: "imd_aml_safe"                   # 数据库（可选，默认自动发现）
-  source_partition: "ds='2026-02-01'"  # 源分区
-  target_partition: "ds='2026-02-01-temp'"  # 目标分区

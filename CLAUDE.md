@@ -4,57 +4,45 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a SQL generation and execution tool focused on:
-- SQL/HDFS command generation from templates
-- Hive query and DDL/DML execution via MCP server
-- MySQL query and write execution
+This is a skill-first SQL generation repository focused on:
+- single-step SQL / HDFS template generation
+- YAML-driven multi-step SQL workflow generation
+- standalone MySQL query / write helpers
 
 ## Key Directories
 
 ```
 ./
-├── conf/                          # Configuration files
-│   ├── aml_conf.conf             # MySQL profiles + active Hive env selector
-│   ├── config.py                 # Config loader
-│   └── hive_envs.json            # Hive local/remote environment mapping
-├── tools/                         # Core utilities
-│   ├── hive_client.py            # Hive execution utility
-│   ├── hive_exec_server.py       # Hive MCP server
-│   ├── mysql_client.py           # MySQL execution helper
-│   └── test_hive_exec.py        # Hive execution smoke test
-└── .claude/skills/               # Claude Code skills
-    ├── intelligent_sql_generation/  # SQL template-based generation
-    └── sql_scenario_execution/     # Multi-step SQL workflow orchestration
+├── conf/
+│   ├── aml_conf.conf               # MySQL profiles
+│   └── config.py                   # Config loader
+├── tools/
+│   └── mysql_client.py             # MySQL execution helper
+└── .claude/skills/
+    ├── intelligent_sql_generation/ # Single-step SQL/HDFS generation skill
+    │   └── agents/openai.yaml      # UI metadata
+    └── sql_workflow/               # Multi-step workflow generation skill
+        └── agents/openai.yaml      # UI metadata
 ```
 
 ## Common Commands
 
 ### Install Dependencies
 ```powershell
-pip install -r requirement.txt
+pip install -r requirements.txt
 ```
 
 ### SQL Generation
 Template-based generation:
-```powershell
-python .claude/skills/intelligent_sql_generation/scripts/generate.py --yaml .claude/skills/intelligent_sql_generation/templates/yaml/data_diff.yaml
+```bash
+python3 .claude/skills/intelligent_sql_generation/scripts/generate.py --yaml .claude/skills/intelligent_sql_generation/assets/templates/yaml/data_diff.yaml
 ```
 
-### Hive Execution
-Start the MCP server:
-```powershell
-python tools/hive_exec_server.py
+### SQL Workflow
+Run a workflow from semantic YAML:
+```bash
+python3 .claude/skills/sql_workflow/scripts/orchestrator.py --yaml .claude/skills/sql_workflow/assets/examples/input_example_data_compare.yaml
 ```
-
-Test Hive execution:
-```powershell
-python tools/test_hive_exec.py --env local --schema local_test
-```
-
-Hive environments are configured in `conf/hive_envs.json` and selected in `conf/aml_conf.conf` via `[hive].active_env`:
-- `local_hs2` - local HiveServer2
-- `uat` - remote Hive connection
-- `local` - local debug environment
 
 ### MySQL Execution
 ```python
@@ -65,20 +53,31 @@ rows = op_mysql("aml_new3", "SELECT 1", op_type="query")
 
 Profiles are defined in `conf/aml_conf.conf` under `[mysql]` section.
 
+### Remote Regression
+Runs a real MCP stdio session against `hive-mcp-remote/hive_exec_server.py`, bootstraps sample Hive data, verifies that Chinese prompts still resolve into deterministic SQL templates, and confirms the client reuses one shared MCP session.
+
+For environment migration, keep Hive JDBC / beeline / auth settings inside the external Hive MCP project and switch them there via `env.json` or by changing `HIVE_MCP_PATH`.
+After that change, restart the current process so the shared MCP session reconnects with the new Hive backend settings.
+
+```bash
+python3 tools/regress_skill_remote.py --remote-hive-mcp-path /Users/xiongyuc/workspace/hive-mcp-remote
+```
+
+### Repeatable Remote CI Regression
+The CI wrapper compile-checks the key scripts, verifies `data_diff` column ordering across multiple `PYTHONHASHSEED` values, runs the skill/workflow MCP regression, and then runs the full prompt-only template regression.
+
+```bash
+tools/ci_remote_regression.sh /Users/xiongyuc/workspace/hive-mcp-remote
+```
+
 ## Architecture
 
-- **SQL Generation**: Uses YAML templates in `.claude/skills/intelligent_sql_generation/templates/yaml/` to generate SQL/HDFS commands
-- **Hive MCP Server**: Provides Hive query execution via MCP protocol (`hive_exec_server.py`)
+- **Skill Layout**: Each skill now uses `scripts/`, `references/`, `assets/`, and `output/` for clearer model- and user-facing structure
+- **SQL Generation**: Uses YAML contracts in `.claude/skills/intelligent_sql_generation/assets/templates/yaml/`
+- **Workflow Generation**: Uses scenario definitions in `.claude/skills/sql_workflow/assets/scenarios/`
 - **MySQL Client**: Simple wrapper around MySQL connections with profile support
-- **Config System**: INI-style config in `aml_conf.conf` with JSON environment mappings in `hive_envs.json`
 
-## MCP Tools Available
+## Notes
 
-When the Hive MCP server is running, these tools are available:
-- `hive_execute_query` - Execute Hive SQL query
-- `hive_execute_dml` - Execute Hive DDL/DML
-- `hive_describe_table` - Describe a Hive table
-- `hive_preview_data` - Preview Hive table data
-- `hive_count_records` - Count rows in a Hive table
-- `hive_show_tables` - Show tables in a schema
-- `hive_close_connections` - Close cached connections
+- Runtime outputs under each skill's `output/` directory are generated locally and should not be committed.
+- Keep local MCP client configuration outside the repository to avoid machine-specific paths in version control.

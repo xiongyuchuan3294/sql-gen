@@ -1,0 +1,4 @@
+interface:
+  display_name: "SQL Workflow"
+  short_description: "Generate multi-step SQL workflows from semantic YAML"
+  default_prompt: "Use $sql_workflow to generate a deterministic multi-step SQL workflow from natural language or semantic YAML."

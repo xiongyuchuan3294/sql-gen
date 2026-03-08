@@ -1,0 +1,45 @@
+scenario:
+  name: data_compare
+  description: Compare the source partition with the temp partition of the same table
+  keywords:
+    - "\u5bf9\u8d26\u5de5\u4f5c\u6d41"
+    - "\u5bf9\u8d26\u6d41\u7a0b"
+    - "\u5bf9\u8d26"
+    - reconciliation workflow
+    - reconcile workflow
+    - reconciliation
+    - compare workflow
+    - data compare
+    - compare
+    - diff
+
+required_params:
+  - table_name
+  - partition
+  - join_keys
+
+defaults:
+  temp_suffix: -temp
+
+steps:
+  - name: probe_table_metadata
+    template: metadata_probe
+    params:
+      db: "{{ db }}"
+      table_name: "{{ table_name }}"
+      table_name_full: "{{ table_name_full }}"
+      partition: "{{ partition }}"
+
+  - name: copy_source_partition_to_temp
+    template: move_partition
+
+  - name: count_source_partition
+    template: data_num
+    partition_role: source
+
+  - name: count_temp_partition
+    template: data_num
+    partition_role: target
+
+  - name: diff_source_vs_temp
+    template: data_diff

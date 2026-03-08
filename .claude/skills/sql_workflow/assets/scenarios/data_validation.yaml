@@ -1,0 +1,49 @@
+scenario:
+  name: data_validation
+  description: Validate partition data quality for a single table
+  keywords:
+    - "\u6821\u9a8c\u5de5\u4f5c\u6d41"
+    - "\u6821\u9a8c\u6d41\u7a0b"
+    - "\u6821\u9a8c"
+    - "\u68c0\u67e5"
+    - "\u9a8c\u8bc1"
+    - "\u6570\u636e\u6821\u9a8c"
+    - "\u6570\u636e\u8d28\u91cf"
+    - validation workflow
+    - quality workflow
+    - validation
+    - quality check
+    - verify
+    - data validation
+    - data quality
+    - dq
+
+required_params:
+  - table_name
+  - partition
+  - join_keys
+
+defaults:
+  having_threshold: 1
+
+steps:
+  - name: probe_table_metadata
+    template: metadata_probe
+    params:
+      db: "{{ db }}"
+      table_name: "{{ table_name }}"
+      table_name_full: "{{ table_name_full }}"
+      partition: "{{ partition }}"
+
+  - name: count_partition
+    template: data_num
+    partition_role: source
+
+  - name: null_checks
+    template: null_checks
+
+  - name: null_rate
+    template: null_rate
+
+  - name: duplicate_key_check
+    template: repeat_check

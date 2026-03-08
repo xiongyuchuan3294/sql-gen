@@ -1,0 +1,6 @@
+type: "create_temp_partition"
+description: "Create an empty temp partition for a partitioned table"
+params:
+  table_name: "example_table"            # table name
+  db: "imd_aml_safe"                     # database name (optional)
+  partition: "ds='2026-02-01-temp'"      # partition value

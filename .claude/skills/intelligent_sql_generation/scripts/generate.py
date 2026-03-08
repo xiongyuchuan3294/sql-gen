@@ -4,6 +4,7 @@ import os
 import re
 import sys
 from functools import lru_cache
+from pathlib import Path
 
 try:
     import yaml
@@ -12,6 +13,12 @@ except ImportError:
     sys.exit(1)
 
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from prompt_dispatcher import dispatch_prompt
 
 
 DEFAULT_HDFS_WAREHOUSE_USER = "hduser1009"
@@ -27,34 +34,20 @@ HDFS_WAREHOUSE_USER_BY_DB = {
 
 def find_repo_root():
     """Find the root of the sql-gen repository (where tools directory exists)."""
-    # 从脚本位置向上查找，找到包含 'tools' 目录的父目录
-    current_path = os.path.abspath(os.path.dirname(__file__))
-    while current_path:
-        parent = os.path.dirname(current_path)
-        tools_path = os.path.join(current_path, "tools")
-        if os.path.isdir(tools_path):
-            return current_path
-        if parent == current_path:  # Root reached
+    current_path = find_skill_root()
+    while True:
+        if (current_path / "tools").is_dir():
+            return str(current_path)
+        if current_path.parent == current_path:
             break
-        current_path = parent
-    # Fallback: 返回 find_project_root() 的父目录
-    return os.path.abspath(os.path.join(find_project_root(), ".."))
+        current_path = current_path.parent
+    return str(find_skill_root().parent)
 
 
-def find_project_root():
-    """Find the root of the sql-gen workspace."""
-    # Start from current script location and go up until finding 'agent_skills'
-    current_path = os.path.abspath(os.path.dirname(__file__))
-    while "agent_skills" in current_path:
-        parent = os.path.dirname(current_path)
-        if parent == current_path: # Root reached
-            break
-        current_path = parent
-    
-    # We expect to be in agent_skills/sql_generation/scripts
-    # So root should be .../agent_skills/sql_generation/
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    return root
+def find_skill_root() -> Path:
+    """Return the root directory of the intelligent_sql_generation skill."""
+    return Path(__file__).resolve().parents[1]
+
 
 def load_yaml(path):
     with open(path, 'r', encoding='utf-8-sig') as f:
@@ -78,17 +71,17 @@ def normalize_table_name(table_name):
 
 def parse_db_table(table_full_name):
     """
-    解析 db.table 格式的表名
+    Parse a table name in db.table format
 
-    返回: (db_name, table_name)
-    例如: "imd_aml_safe.t_local_hs2_aml_safe_p_ds" -> ("imd_aml_safe", "t_local_hs2_aml_safe_p_ds")
+    Returns: (db_name, table_name)
+    Example: "imd_aml_safe.t_local_hs2_aml_safe_p_ds" -> ("imd_aml_safe", "t_local_hs2_aml_safe_p_ds")
     """
     if not table_full_name:
         return "", ""
 
     table_full_name = str(table_full_name).strip()
 
-    # 尝试用 . 分割
+    # Split on the last dot when present
     if "." in table_full_name:
         parts = table_full_name.rsplit(".", 1)
         if len(parts) == 2:
@@ -97,7 +90,7 @@ def parse_db_table(table_full_name):
             if db_name and table_name:
                 return db_name, table_name
 
-    # 如果没有 db 前缀，返回空 db
+    # If no db prefix exists, return an empty db name
     return "", table_full_name
 
 
@@ -123,7 +116,7 @@ def parse_first_column_rows(result_text):
     values = []
     for line in data_lines:
         first_col = line.split("\t")[0].strip()
-        # 去掉 beeline 返回的单引号（如 'aml_demo' -> aml_demo）
+        # Strip single quotes returned by beeline (for example 'aml_demo' -> aml_demo)
         if first_col and first_col.startswith("'") and first_col.endswith("'"):
             first_col = first_col[1:-1]
         if first_col:
@@ -137,52 +130,21 @@ def load_hive_runtime():
     if repo_root not in sys.path:
         sys.path.insert(0, repo_root)
 
-    # Try external hive-mcp directories first.
-    parent_dir = os.path.dirname(repo_root)
-    candidate_paths = [
-        os.getenv("HIVE_MCP_PATH", "").strip(),
-        os.getenv("SQL_GEN_HIVE_MCP_PATH", "").strip(),
-        os.path.join(parent_dir, "hive-mcp"),
-        os.path.join(parent_dir, "hive-mcp-uat"),
-        os.path.expanduser("~/workspace/hive-mcp"),
-        os.path.expanduser("~/workspace/hive-mcp-uat"),
-        r"D:\workspace\hive-mcp",
-        r"D:\workspace\hive-mcp-uat",
-    ]
-    seen_paths = set()
-    valid_paths = []
-    for base_path in candidate_paths:
-        if not base_path:
-            continue
-        normalized = os.path.normpath(base_path)
-        if normalized in seen_paths or not os.path.isdir(normalized):
-            continue
-        seen_paths.add(normalized)
-        valid_paths.append(normalized)
-
-    # Keep candidate order as priority: earlier item = higher priority.
-    for normalized in reversed(valid_paths):
-        tools_path = os.path.join(normalized, "tools")
-        if os.path.isdir(tools_path) and tools_path not in sys.path:
-            sys.path.insert(0, tools_path)
-        if normalized not in sys.path:
-            sys.path.insert(0, normalized)
+    script_dir = str(Path(__file__).resolve().parent)
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
 
     try:
-        from hive_client import HiveRuntimeConfig, JdbcHiveUtils
-    except Exception:
-        try:
-            # Repository layout uses tools/hive_client.py.
-            from tools.hive_client import HiveRuntimeConfig, JdbcHiveUtils
-        except Exception:
-            return None, None
+        from hive_mcp_runtime import build_hive_runtime
+    except Exception as exc:
+        print(f"Warning: failed to import Hive MCP runtime: {exc}", file=sys.stderr)
+        return None, None
 
     try:
-        default_env = HiveRuntimeConfig.active_env()
-    except Exception:
-        default_env = "local"
-
-    return JdbcHiveUtils, default_env
+        return build_hive_runtime(repo_root)
+    except Exception as exc:
+        print(f"Warning: failed to initialize Hive MCP runtime: {exc}", file=sys.stderr)
+        return None, None
 
 
 def discover_db_names_by_table(table_name, env=None):
@@ -243,13 +205,37 @@ def discover_db_names_by_table(table_name, env=None):
     return unique
 
 
+def unique_preserve_order(values):
+    ordered = []
+    seen = set()
+    for value in values or []:
+        item = str(value or '').strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return ordered
+
+
+def stable_shared_columns(primary_columns, secondary_columns):
+    secondary_set = {column for column in secondary_columns or [] if column}
+    ordered = []
+    seen = set()
+    for column in primary_columns or []:
+        if not column or column not in secondary_set or column in seen:
+            continue
+        seen.add(column)
+        ordered.append(column)
+    return ordered
+
+
 def discover_partition_fields(db_name, table_name, env=None):
     """
-    发现表的分区字段
+    Discover partition fields for a table
 
-    返回: {
+    Returns: {
         "is_partitioned": True/False,
-        "partition_fields": ["ds"] 或 ["ds", "hour"]
+        "partition_fields": ["ds"] or ["ds", "hour"]
     }
     """
     if not db_name or not table_name:
@@ -263,7 +249,7 @@ def discover_partition_fields(db_name, table_name, env=None):
     effective_env = (default_env or "local").strip()
 
     try:
-        # 使用 DESCRIBE FORMATTED 获取分区信息
+        # Use DESCRIBE FORMATTED to discover partition metadata
         result = jdbc_hive_utils.execute_query(
             schema=db_name,
             sql=f"DESCRIBE FORMATTED {table_name}",
@@ -285,9 +271,9 @@ def discover_partition_fields(db_name, table_name, env=None):
 
 def parse_partition_fields_from_desc(desc_output):
     """
-    解析 DESCRIBE FORMATTED 输出，提取分区字段
+    Parse DESCRIBE FORMATTED output and extract partition fields
 
-    返回: {
+    Returns: {
         "is_partitioned": True/False,
         "partition_fields": ["ds", "hour"]
     }
@@ -303,26 +289,26 @@ def parse_partition_fields_from_desc(desc_output):
     for line in lines:
         if '# Partition Information' in line:
             in_partition_section = True
-            skip_header_line = True  # 下一行是 # col_name data_type comment
+            skip_header_line = True  # The next line is the partition header row
             continue
 
         if in_partition_section:
             stripped = line.strip()
 
-            # 跳过 header 行 (# col_name data_type comment)
+            # Skip the header row (# col_name data_type comment)
             if skip_header_line:
                 skip_header_line = False
                 continue
 
-            # 检查是否到达下一个 # 开头的新section
+            # Stop when the next section header starts
             if stripped.startswith('# '):
                 break
 
-            # 跳过空行和 NULL 行
+            # Skip empty lines and NULL rows
             if not stripped or 'NULL' in stripped:
                 continue
 
-            # 解析分区字段（取第一列）
+            # Parse the partition field from the first column
             cols = stripped.split('\t')
             if cols and cols[0].strip():
                 field_name = cols[0].strip()
@@ -335,67 +321,22 @@ def parse_partition_fields_from_desc(desc_output):
     }
 
 
-def validate_partition_params(table_metadata, user_partitions):
-    """
-    校验分区参数
-
-    table_metadata: {
-        "is_partitioned": True/False,
-        "partition_fields": ["ds", "hour"]
-    }
-    user_partitions: {
-        "ds": "2026-02-01",
-        "hour": "23"
-    }
-
-    返回: {
-        "valid": True/False,
-        "message": "错误信息（如果无效）",
-        "missing_fields": ["hour"]（缺失的字段）
-    }
-    """
-    if not table_metadata["is_partitioned"]:
-        # 非分区表，直接通过
-        return {"valid": True, "message": None, "missing_fields": []}
-
-    required_fields = table_metadata["partition_fields"]
-    provided_fields = list(user_partitions.keys()) if user_partitions else []
-
-    # 1. 检查是否指定了任何分区
-    if not provided_fields:
-        return {
-            "valid": False,
-            "message": f"【参数缺失】该表是分区表，分区字段为: {required_fields}，请指定分区值，如 {required_fields[0]}='2026-02-01'",
-            "missing_fields": required_fields
-        }
-
-    # 2. 检查是否缺少必需的分区字段
-    missing = set(required_fields) - set(provided_fields)
-    if missing:
-        return {
-            "valid": False,
-            "message": f"【参数缺失】该表有二级分区 {list(missing)}，请补充指定",
-            "missing_fields": list(missing)
-        }
-
-    return {"valid": True, "message": None, "missing_fields": []}
-
 
 def validate_join_keys(join_keys):
     """
-    校验主键参数
+    Validate join-key parameters
 
-    join_keys: ["id"] 或 ["id", "user_id"]
+    join_keys: ["id"] or ["id", "user_id"]
 
-    返回: {
+    Returns: {
         "valid": True/False,
-        "message": "错误信息（如果无效）"
+        "message": "error message when invalid"
     }
     """
     if not join_keys or len(join_keys) == 0:
         return {
             "valid": False,
-            "message": "【参数缺失】请提供主键字段（join_keys），用于数据对比"
+            "message": "Missing join_keys. Please provide primary key fields for data comparison."
         }
 
     return {"valid": True, "message": None}
@@ -403,40 +344,41 @@ def validate_join_keys(join_keys):
 
 def extract_partition_from_text(text: str) -> dict:
     """
-    从用户输入文本中提取分区参数
+    Extract partition parameters from user input text
 
-    支持格式:
+    Supported formats:
     - ds=2026-02-01
     - ds='2026-02-01'
-    - 2026-02-01 分区
-    - 的 2026-02-01 分区
+    - partition 2026-02-01
+    - on partition 2026-02-01
+    - a Chinese partition phrase such as a date followed by the Chinese word for partition
 
-    返回: {
+    Returns: {
         "raw_partition": "ds=2026-02-01,hour=23",
-        "partition_fields": ["ds"],  # 推断的分区字段
+        "partition_fields": ["ds"],  # inferred partition field
     }
     """
     import re
     params = {}
     partition_parts = []
 
-    # 格式1: field=value 或 field='value'
+    # Pattern 1: field=value or field='value'
     partition_pattern = r"([a-zA-Z_][a-zA-Z0-9_]*)=['\"]?([^'\"\\s]+)['\"]?"
     matches = re.findall(partition_pattern, text)
     for field, value in matches:
         partition_parts.append(f"{field}={value}")
 
-    # 格式2: 自然语言 "2026-02-01 分区"
+    # Pattern 2: natural-language partition dates
     if not partition_parts:
-        natural_pattern = r"(?:的|在|分区)?\s*(\d{4}[-/]\d{2}[-/]\d{2})\s*(?:分区|号)?"
+        natural_pattern = r"(?:for|on|partition|\u7684|\u5728|\u5206\u533a)?\s*(\d{4}[-/]\d{2}[-/]\d{2})\s*(?:partition|date|\u5206\u533a|\u53f7)?"
         natural_matches = re.findall(natural_pattern, text)
         if natural_matches:
-            # 推断使用 ds 作为分区字段
+            # Infer ds as the partition field
             for value in natural_matches:
                 partition_parts.append(f"ds={value.replace('/', '-')}")
 
-    # 格式3: hour=23 或 23点
-    hour_pattern = r"(?:hour|时)\s*=\s*(\d{1,2})|(\d{1,2})\s*(?:点|时|hour)"
+    # Pattern 3: hour=23 or 23 hour
+    hour_pattern = r"(?:hour|\u65f6)\s*=\s*(\d{1,2})|(\d{1,2})\s*(?:hour|h|\u70b9|\u65f6)"
     hour_matches = re.findall(hour_pattern, text)
     for match in hour_matches:
         hour_value = match[0] or match[1]
@@ -450,27 +392,27 @@ def extract_partition_from_text(text: str) -> dict:
 
 def validate_partition_from_metadata(db_name: str, table_name: str, raw_partition: str, env=None) -> dict:
     """
-    通过元数据校验分区参数
+    Validate partition parameters against metadata
 
-    1. 发现表的分区字段
-    2. 校验用户提供的分区是否完整
-    3. 如果用户未提供分区，返回提示
+    1. Discover partition fields for a table
+    2. Validate whether the provided partition values are complete
+    3. Return a hint when partition values are missing
 
-    返回: {
+    Returns: {
         "valid": True/False,
-        "message": "错误信息",
+        "message": "error message",
         "partition_fields": ["ds", "hour"],
         "formatted_partition": "ds='2026-02-01',hour='23'"
     }
     """
     import re
 
-    # 1. 发现分区字段
+    # 1. Discover partition fields
     metadata = discover_partition_fields(db_name, table_name, env)
     is_partitioned = metadata.get("is_partitioned", False)
     partition_fields = metadata.get("partition_fields", [])
 
-    # 2. 如果非分区表，直接通过
+    # 2. If the table is not partitioned, pass through
     if not is_partitioned:
         return {
             "valid": True,
@@ -480,7 +422,7 @@ def validate_partition_from_metadata(db_name: str, table_name: str, raw_partitio
             "formatted_partition": ""
         }
 
-    # 3. 解析用户提供的分区
+    # 3. Parse user-provided partition values
     user_partitions = {}
     if raw_partition:
         for part in raw_partition.split(","):
@@ -489,28 +431,28 @@ def validate_partition_from_metadata(db_name: str, table_name: str, raw_partitio
                 v = v.strip().strip("'\"")
                 user_partitions[k] = v
 
-    # 4. 校验是否提供了分区
+    # 4. Check whether partition values were provided
     if not user_partitions:
         return {
             "valid": False,
-            "message": f"【参数缺失】该表是分区表，分区字段为: {partition_fields}，请指定分区值，如 {partition_fields[0]}='2026-02-01'",
+            "message": f"Missing required partition values. This table is partitioned by {partition_fields}. Please provide values such as {partition_fields[0]}='2026-02-01'",
             "partition_fields": partition_fields,
             "is_partitioned": True,
             "formatted_partition": ""
         }
 
-    # 5. 校验是否缺少分区字段
+    # 5. Check whether any partition fields are missing
     missing = set(partition_fields) - set(user_partitions.keys())
     if missing:
         return {
             "valid": False,
-            "message": f"【参数缺失】该表有二级分区 {list(missing)}，请补充指定",
+            "message": f"Missing required partition fields: {list(missing)}. Please provide all partition levels.",
             "partition_fields": partition_fields,
             "is_partitioned": True,
             "formatted_partition": ""
         }
 
-    # 6. 格式化分区
+    # 6. Format the partition string
     formatted_parts = []
     for field in partition_fields:
         value = user_partitions.get(field, "")
@@ -528,9 +470,9 @@ def validate_partition_from_metadata(db_name: str, table_name: str, raw_partitio
 
 def get_non_partition_columns(db_name: str, table_name: str, env=None) -> list[str]:
     """
-    获取表的非分区字段列表
+    Get the non-partition columns of a table
 
-    返回: ["id", "name", "address"]
+    Returns: ["id", "name", "address"]
     """
     if not db_name or not table_name:
         return []
@@ -543,30 +485,30 @@ def get_non_partition_columns(db_name: str, table_name: str, env=None) -> list[s
     effective_env = (default_env or "local").strip()
 
     try:
-        # DESCRIBE table 获取所有字段
+        # Use DESCRIBE to get all table columns
         result = jdbc_hive_utils.execute_query(
             schema=db_name,
             sql=f"DESCRIBE {table_name}",
             env=effective_env,
         )
 
-        # 获取分区字段
+        # Fetch partition fields
         partition_info = discover_partition_fields(db_name, table_name, env)
         partition_fields = set(partition_info.get("partition_fields", []))
 
-        # 解析字段（排除分区字段）
+        # Parse columns and exclude partition fields
         columns = []
         for line in result.split('\n'):
-            # 不要 strip 整行，否则 \tNULL\tNULL 会变成 NULL\tNULL
+            # Do not strip the whole line; otherwise \tNULL\tNULL becomes NULL\tNULL
             if not line or line.isspace():
                 continue
-            # 跳过空行和分隔行
+            # Skip empty rows and separator rows
             if '#' in line or 'col_name' in line.lower():
                 continue
             cols = line.split('\t')
             if cols and cols[0].strip():
                 field_name = cols[0].strip()
-                # 跳过分区字段
+                # Skip partition columns
                 if field_name not in partition_fields and re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", field_name):
                     columns.append(field_name)
 
@@ -583,12 +525,12 @@ def get_non_partition_columns(db_name: str, table_name: str, env=None) -> list[s
 
 def prepare_data_diff_params(db_name, table_name, source_partition, target_partition, join_keys, env=None):
     """
-    准备 data_diff 模板的完整参数
+    Prepare the full parameter set for the data_diff template
 
-    1. 获取表的非分区字段
-    2. 构建完整的模板参数
+    1. Get the non-partition columns
+    2. Build the full template parameters
 
-    返回: {
+    Returns: {
         "source_table": "db.table",
         "target_table": "db.table",
         "source_partition": "ds='2026-02-01'",
@@ -597,10 +539,10 @@ def prepare_data_diff_params(db_name, table_name, source_partition, target_parti
         "non_partition_columns": ["id", "name", "address"],
     }
     """
-    # 构建完整表名
+    # Build the fully qualified table name
     table_full = f"{db_name}.{table_name}" if db_name else table_name
 
-    # 获取非分区字段
+    # Fetch non-partition columns
     non_partition_cols = []
     if db_name and table_name:
         try:
@@ -608,13 +550,13 @@ def prepare_data_diff_params(db_name, table_name, source_partition, target_parti
         except Exception as e:
             print(f"Warning: failed to get non-partition columns: {e}", file=sys.stderr)
 
-    # 确保有 join_keys
+    # Ensure join_keys are present
     if not join_keys:
         join_keys = ["id"]
 
-    # 确保有非分区字段用于对比
+    # Ensure there are non-partition columns to compare
     if not non_partition_cols:
-        non_partition_cols = join_keys[:1]  # 使用主键作为后备
+        non_partition_cols = join_keys[:1]  # Fall back to the first join key
 
     return {
         "source_table": table_full,
@@ -701,19 +643,19 @@ def build_hdfs_target_path(target):
 def prepare_params(template_name, params, env=None):
     prepared_params = dict(params or {})
 
-    # 处理 move_partition, data_num 等模板：自动合并 db.table 为 table_name
+    # For templates such as move_partition and data_num, automatically combine db + table into table_name
     if template_name in ("move_partition", "data_num", "null_checks", "null_rate", "repeat_check", "field_dist", "check_field_len"):
         db = prepared_params.get("db", "")
         table = prepared_params.get("table", "")
         table_name = prepared_params.get("table_name", "")
 
-        # 如果没有 table_name 但有 db 和 table，自动组合
+        # Auto-compose table_name when db and table are provided separately
         if not table_name and db and table:
             prepared_params["table_name"] = f"{db}.{table}"
 
         return prepared_params
 
-    # 处理 data_diff 模板：自动获取表的非分区字段
+    # For data_diff, automatically fetch non-partition columns
     if template_name == "data_diff":
         prepared_params = dict(params or {})
         source_table = prepared_params.get("source_table", "")
@@ -722,15 +664,15 @@ def prepare_params(template_name, params, env=None):
         target_partition = prepared_params.get("target_partition", "")
         join_keys = prepared_params.get("join_keys", [])
 
-        # 如果用户已指定 compare_columns，直接返回
+        # Return immediately when compare_columns is already provided
         if prepared_params.get("compare_columns"):
             return prepared_params
 
-        # 解析 source_table 和 target_table 获取 db 和 table
+        # Parse source_table and target_table into db and table names
         source_db, source_table_name = parse_db_table(source_table)
         target_db, target_table_name = parse_db_table(target_table)
 
-        # 获取 source_table 的非分区字段
+        # Fetch non-partition columns from source_table
         source_columns = []
         source_error = None
         if source_db and source_table_name:
@@ -740,7 +682,7 @@ def prepare_params(template_name, params, env=None):
                 source_error = str(e)
                 print(f"Warning: failed to get source columns: {e}", file=sys.stderr)
 
-        # 获取 target_table 的非分区字段
+        # Fetch non-partition columns from target_table
         target_columns = []
         target_error = None
         if target_db and target_table_name:
@@ -750,7 +692,7 @@ def prepare_params(template_name, params, env=None):
                 target_error = str(e)
                 print(f"Warning: failed to get target columns: {e}", file=sys.stderr)
 
-        # 检查是否成功获取字段
+        # Check whether any columns were discovered successfully
         if not source_columns and not target_columns:
             error_msg = (
                 f"[ERROR] Failed to automatically get table columns!\n"
@@ -767,18 +709,18 @@ def prepare_params(template_name, params, env=None):
                 f"      - address\n"
             )
             print(error_msg, file=sys.stderr)
-            # 使用 join_keys 作为后备，但给出警告
+            # Fall back to join_keys and keep the warning visible
             compare_columns = join_keys if join_keys else []
             if not compare_columns:
-                raise ValueError("无法获取字段信息，且未指定 join_keys，请手动指定 compare_columns 或 join_keys")
+                raise ValueError("Failed to discover columns and no join_keys were provided. Please specify compare_columns or join_keys manually.")
         else:
-            # 合并字段，去重，保留在两个表中都存在的字段
+            # Keep data_diff columns deterministic by preserving the source-table column order.
             if source_columns and target_columns:
-                compare_columns = list(set(source_columns) & set(target_columns))
+                compare_columns = stable_shared_columns(source_columns, target_columns)
             elif source_columns:
-                compare_columns = source_columns
+                compare_columns = unique_preserve_order(source_columns)
             else:
-                compare_columns = target_columns
+                compare_columns = unique_preserve_order(target_columns)
 
         prepared_params["compare_columns"] = compare_columns
         return prepared_params
@@ -798,12 +740,12 @@ def prepare_params(template_name, params, env=None):
 
 
 def render_template(template_name, params):
-    root_dir = find_project_root()
-    sql_dir = os.path.join(root_dir, 'templates', 'sql')
-    shell_dir = os.path.join(root_dir, 'templates', 'shell')
+    skill_root = find_skill_root()
+    sql_dir = skill_root / 'assets' / 'templates' / 'sql'
+    shell_dir = skill_root / 'assets' / 'templates' / 'shell'
     
     # Search paths for Jinja2
-    env = Environment(loader=FileSystemLoader([sql_dir, shell_dir]))
+    env = Environment(loader=FileSystemLoader([str(sql_dir), str(shell_dir)]))
     
     # Try extensions in order
     candidates = [
@@ -821,43 +763,86 @@ def render_template(template_name, params):
     print(f"Error: Template {template_name} not found in sql or shell directories.")
     sys.exit(1)
 
+def save_generated_output(template_name, content, ext, resolved_config=None):
+    output_dir = find_skill_root() / 'output'
+    output_dir.mkdir(exist_ok=True)
+
+    output_file = output_dir / f"{template_name}_generated.{ext}"
+    with output_file.open('w', encoding='utf-8', newline='\n') as f:
+        f.write(content)
+    print(f"Saved to: {output_file}")
+
+    if resolved_config is not None:
+        resolved_yaml_file = output_dir / f"{template_name}_resolved.yaml"
+        with resolved_yaml_file.open('w', encoding='utf-8', newline='\n') as f:
+            yaml.safe_dump(resolved_config, f, sort_keys=False, allow_unicode=True)
+        print(f"Saved resolved YAML to: {resolved_yaml_file}")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Generate Hive SQL from YAML config.")
-    parser.add_argument('--yaml', required=True, help="Path to YAML configuration file")
-    parser.add_argument('--template', help="Template name (defaults to 'type' in YAML)")
-    
+    parser = argparse.ArgumentParser(description="Generate Hive SQL or shell commands from YAML config or a natural-language prompt.")
+    parser.add_argument('--yaml', help="Path to YAML configuration file")
+    parser.add_argument('--prompt', help="Natural-language request that should be dispatched to a template")
+    parser.add_argument('--template', help="Template name (defaults to 'type' in YAML or dispatcher result)")
+    parser.add_argument('--env', help="Hive environment name for metadata-aware preparation")
+
     args = parser.parse_args()
-    
-    # Load Config
-    config = load_yaml(args.yaml)
-    
-    # Determine Template
-    template_name = args.template
-    if not template_name:
-        template_name = config.get('type')
+
+    if not args.yaml and not args.prompt:
+        print("Error: provide either --yaml or --prompt.")
+        sys.exit(1)
+    if args.yaml and args.prompt:
+        print("Error: use either --yaml or --prompt, not both.")
+        sys.exit(1)
+
+    resolved_config = None
+    if args.prompt:
+        dispatch_result = dispatch_prompt(args.prompt, explicit_template=args.template)
+        template_name = dispatch_result.get('template_name')
+        params_source = dispatch_result.get('params', {})
+        resolved_config = {
+            'type': template_name,
+            'prompt': args.prompt,
+            'dispatcher': dispatch_result.get('dispatcher', {}),
+            'params': params_source,
+        }
+        print('-' * 20 + ' Prompt Dispatch ' + '-' * 20)
+        print(f"Template: {template_name}")
+        print(yaml.safe_dump(resolved_config, sort_keys=False, allow_unicode=True).rstrip())
+        print('-' * 55)
+    else:
+        config = load_yaml(args.yaml)
+        template_name = args.template or config.get('type')
         if not template_name:
             print("Error: YAML file must specify 'type' or --template argument required.")
             sys.exit(1)
-            
-    # Render
+        params_source = config.get('params', {})
+        resolved_config = {
+            'type': template_name,
+            'params': params_source,
+        }
+
     params = prepare_params(
         template_name,
-        config.get('params', {}),
+        params_source,
+        env=args.env,
     )
     content, ext = render_template(template_name, params)
-    
-    print("-" * 20 + f" Generated {ext.upper()} " + "-" * 20)
+
+    print('-' * 20 + f' Generated {ext.upper()} ' + '-' * 20)
     print(content)
-    print("-" * 55)
+    print('-' * 55)
 
-    # Write SQL/SH to output directory (not YAML)
-    if ext in ("sql", "sh"):
-        output_dir = os.path.join(find_project_root(), 'output')
-        os.makedirs(output_dir, exist_ok=True)
-        output_file = os.path.join(output_dir, f"{template_name}_generated.{ext}")
-        with open(output_file, 'w', encoding='utf-8', newline='\n') as f:
-            f.write(content)
-        print(f"Saved to: {output_file}")
+    if ext in ('sql', 'sh'):
+        save_generated_output(
+            template_name,
+            content,
+            ext,
+            resolved_config={
+                **(resolved_config or {}),
+                'params': params,
+            },
+        )
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
